@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Config diff</h1>
+  <p><a class="btn" href="/config-snapshots/{{ router_id }}">Back to config history</a></p>
+
+  {% if diff_html is none %}
+    <p>No earlier snapshot to compare against — this is the first one captured for this router.</p>
+  {% elif diff_html %}
+    <pre class="diff">{{ diff_html | safe }}</pre>
+  {% else %}
+    <p>No changes since the previous snapshot.</p>
+  {% endif %}
+{% endblock %}

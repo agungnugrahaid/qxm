@@ -1,0 +1,187 @@
+version: "3.8"
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_DB: qoe
+      POSTGRES_USER: qoe
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    # No host port published — only reachable from other containers on this
+    # stack's internal network. Use Adminer (behind Caddy) if you need a
+    # human-facing view.
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - timescale_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qoe"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  adminer:
+    image: adminer
+    depends_on:
+      - timescaledb
+    restart: unless-stopped
+
+  ingestion-api:
+    build: ./ingestion-api
+    environment:
+      DATABASE_URL: postgresql://qoe:${DB_PASSWORD:-changeme}@timescaledb:5432/qoe
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  collector:
+    build: ./collector
+    environment:
+      DATABASE_URL: postgresql://qoe:${DB_PASSWORD:-changeme}@timescaledb:5432/qoe
+    volumes:
+      - ./collector/controllers.yaml:/app/controllers.yaml:ro
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  admin-ui:
+    build:
+      context: .
+      dockerfile: admin-ui/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://qoe:${DB_PASSWORD:-changeme}@timescaledb:5432/qoe
+      INGEST_BASE_URL: ${INGEST_BASE_URL:-https://monitor.yourisp.com}
+      SFTP_HOST: ${SFTP_HOST:-monitor.yourisp.com}
+      SFTP_PORT: ${SFTP_PORT:-2222}
+      SFTP_USER: configupload
+      SFTP_PASSWORD: ${SFTP_PASSWORD:-changeme}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  sftp:
+    image: atmoz/sftp
+    environment:
+      SFTP_USERS: configupload:${SFTP_PASSWORD:-changeme}:::upload
+    volumes:
+      # Mounted at the chroot root, not directly at "upload" -- atmoz/sftp's
+      # own entrypoint creates + chowns the writable "upload" subdirectory
+      # on startup, but only if we don't pre-empt that path with a volume
+      # mount (which would otherwise land it root-owned, unwritable by the
+      # sftp user).
+      - sftp_uploads:/home/configupload
+    ports:
+      - "2222:22"   # Caddy can't proxy raw SFTP -- same reasoning as promtail's 1514/udp
+    restart: unless-stopped
+
+  config-snapshot-watcher:
+    build: ./config-snapshot-watcher
+    environment:
+      DATABASE_URL: postgresql://qoe:${DB_PASSWORD:-changeme}@timescaledb:5432/qoe
+    volumes:
+      - sftp_uploads:/uploads
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      sftp:
+        condition: service_started
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.6
+    volumes:
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.6
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "1514:1514/udp"   # MikroTik remote syslog target — stays exposed directly;
+                          # Caddy fronts HTTP(S) services, not raw UDP syslog.
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_SECURITY_DISABLE_BRUTE_FORCE_LOGIN_PROTECTION: "true"
+      DB_PASSWORD: ${DB_PASSWORD:-changeme}   # used by datasources.yml provisioning
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - timescaledb
+      - loki
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - ingestion-api
+      - admin-ui
+      - grafana
+      - adminer
+    restart: unless-stopped
+
+  pg-backup:
+    image: prodrigestivill/postgres-backup-local:16
+    environment:
+      POSTGRES_HOST: timescaledb
+      POSTGRES_DB: qoe
+      POSTGRES_USER: qoe
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+    volumes:
+      - pg_backups:/backups
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  watchdog:
+    build: ./watchdog
+    environment:
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+    depends_on:
+      - ingestion-api
+      - admin-ui
+    restart: unless-stopped
+
+volumes:
+  timescale_data:
+  grafana_data:
+  loki_data:
+  caddy_data:
+  caddy_config:
+  pg_backups:
+  sftp_uploads:

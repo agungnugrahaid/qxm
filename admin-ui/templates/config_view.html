@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Config snapshot</h1>
+  <p>
+    <a class="btn" href="/config-snapshots/{{ router_id }}">Back to config history</a>
+    <a class="btn" href="/config-snapshots/{{ router_id }}/{{ timestamp }}">Download</a>
+  </p>
+
+  <pre class="diff">{{ config_html | safe }}</pre>
+{% endblock %}

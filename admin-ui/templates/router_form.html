@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>{{ "Edit" if router else "Add" }} router</h1>
+
+  <form method="post" action="{{ '/routers/' ~ router.id ~ '/edit' if router else '/routers/new' }}">
+    <div class="field">
+      <label>Identity name (must match the router's RouterOS identity)</label>
+      <input name="identity_name" value="{{ router.identity_name if router else '' }}" required>
+    </div>
+
+    <div class="field">
+      <label>Customer</label>
+      <select name="customer_id" required>
+        {% for c in customers %}
+          <option value="{{ c.id }}" {% if router and router.customer_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+      <small><a href="/customers">Manage customers</a></small>
+    </div>
+
+    <div class="field">
+      <label>Management host/IP</label>
+      <input name="mgmt_host" value="{{ router.mgmt_host if router else '' }}" required>
+    </div>
+
+    <div class="field">
+      <label>Management port</label>
+      <input name="mgmt_port" type="number" value="{{ router.mgmt_port if router else 8728 }}" required>
+    </div>
+
+    <div class="field">
+      <label>Admin username</label>
+      <input name="admin_user" value="{{ router.admin_user if router else '' }}" required>
+    </div>
+
+    <div class="field">
+      <label>Admin password</label>
+      <input name="admin_password" type="password" value="{{ router.admin_password if router else '' }}" required>
+    </div>
+
+    <div class="field">
+      <label>WAN/uplink interface (e.g. ether1, pppoe-out1)</label>
+      <input name="wan_interface" value="{{ router.wan_interface if router else 'ether1' }}" required>
+    </div>
+
+    <div class="field">
+      <label>Backup/failover uplink interface (optional -- leave blank if this router only has one WAN)</label>
+      <input name="wan_interface_backup" value="{{ router.wan_interface_backup if router and router.wan_interface_backup else '' }}">
+    </div>
+
+    <div class="field">
+      <label>
+        <input type="checkbox" name="use_ssl" value="true" style="width:auto" {% if router and router.use_ssl %}checked{% endif %}>
+        Use api-ssl (TLS, usually port 8729) instead of plaintext api
+      </label>
+      <small>Requires a certificate already assigned to the router's api-ssl service -- see routeros/README.md.</small>
+    </div>
+
+    <button class="btn primary" type="submit">Save</button>
+    <a class="btn" href="/">Cancel</a>
+  </form>
+{% endblock %}

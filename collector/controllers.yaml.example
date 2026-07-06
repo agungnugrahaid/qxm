@@ -1,0 +1,17 @@
+# Copy this to controllers.yaml and fill in real values — controllers.yaml
+# itself is gitignored since it holds live UniFi controller credentials.
+#
+# Pilot config: start with ONE controller and 2-3 sites, not all 5/250.
+# Add more entries under `controllers` once the pilot is proven out.
+
+poll_interval_seconds: 300
+
+controllers:
+  - name: pilot-controller-1
+    base_url: "https://192.168.1.5:8443"   # your controller's URL
+    is_unifi_os: false                       # true if this is a UDM/UDM Pro console
+    api_user: "api-readonly"
+    api_password: "CHANGE_ME"
+    sites:
+      - "default"
+      # - "another-site-name"

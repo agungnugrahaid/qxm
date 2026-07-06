@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Customers</h1>
+
+  <table>
+    <tr><th>Name</th><th>Address</th></tr>
+    {% for c in customers %}
+    <tr><td>{{ c.name }}</td><td>{{ c.address or "—" }}</td></tr>
+    {% endfor %}
+  </table>
+
+  <h2>Add customer</h2>
+  <form method="post" action="/customers/new">
+    <div class="field">
+      <label>Name</label>
+      <input name="name" required>
+    </div>
+    <div class="field">
+      <label>Address</label>
+      <input name="address">
+    </div>
+    <button class="btn primary" type="submit">Add</button>
+  </form>
+{% endblock %}

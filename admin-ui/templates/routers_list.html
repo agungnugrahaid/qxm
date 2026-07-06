@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Routers</h1>
+  <p>
+    <a class="btn primary" href="/routers/new">+ Add router</a>
+    <form class="inline" method="post" action="/deploy-all" onsubmit="return confirm('Push scripts to every router now?');">
+      <button class="btn" type="submit">Deploy to all</button>
+    </form>
+  </p>
+
+  <table>
+    <tr>
+      <th>Identity</th>
+      <th>Customer</th>
+      <th>Mgmt host</th>
+      <th>Status</th>
+      <th>Last seen</th>
+      <th></th>
+    </tr>
+    {% for r in routers %}
+    <tr>
+      <td>{{ r.identity_name }}</td>
+      <td>{{ r.customer_name or "—" }}</td>
+      <td>{{ r.mgmt_host }}:{{ r.mgmt_port }}</td>
+      <td>
+        {% if r.online %}
+          <span class="badge online">online</span>
+        {% else %}
+          <span class="badge offline">offline</span>
+        {% endif %}
+      </td>
+      <td>{{ r.last_seen_at or "never" }}</td>
+      <td>
+        <a class="btn" href="/routers/{{ r.id }}/edit">Edit</a>
+        <a class="btn" href="/config-snapshots/{{ r.id }}">Config History</a>
+        <form class="inline" method="post" action="/routers/{{ r.id }}/deploy">
+          <button class="btn primary" type="submit">Deploy</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+{% endblock %}

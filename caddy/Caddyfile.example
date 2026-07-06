@@ -1,0 +1,41 @@
+# Copy this to Caddyfile and fill in real domains + real basic-auth hashes —
+# Caddyfile itself is gitignored since the deployed version carries your
+# real domains and password hashes.
+#
+# All four need DNS A/AAAA records pointing at this VM's public IP.
+#
+# ingestion is the only one that MUST be public (250 CPE routers push to
+# it). Grafana/Adminer/admin-ui are internal tools — gated with basic auth
+# below as a baseline; if you have a fixed admin/office IP range or a VPN,
+# swap the basicauth block for an IP allowlist instead (stronger, and
+# means credentials leaking isn't enough to get in).
+
+{
+	email admin@yourisp.com
+}
+
+monitor.yourisp.com {
+	reverse_proxy ingestion-api:8000
+}
+
+admin.yourisp.com {
+	basicauth {
+		# Generate with: docker compose run --rm caddy caddy hash-password
+		admin JDJhJDE0JFJEQ0hBTkdFX01FX1BMQUNFSE9MREVSX0hBU0g
+	}
+	reverse_proxy admin-ui:8082
+}
+
+grafana.yourisp.com {
+	basicauth {
+		admin JDJhJDE0JFJEQ0hBTkdFX01FX1BMQUNFSE9MREVSX0hBU0g
+	}
+	reverse_proxy grafana:3000
+}
+
+adminer.yourisp.com {
+	basicauth {
+		admin JDJhJDE0JFJEQ0hBTkdFX01FX1BMQUNFSE9MREVSX0hBU0g
+	}
+	reverse_proxy adminer:8080
+}

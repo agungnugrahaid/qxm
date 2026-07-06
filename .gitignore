@@ -1,0 +1,16 @@
+# Secrets -- never commit. Copy .env.example to .env and fill in real values.
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# OS cruft
+.DS_Store
+
+# Local Claude Code session settings -- not project config
+.claude/
+
+# Per-router credentials/config not meant for version control
+collector/controllers.yaml
+routeros/router_inventory.csv

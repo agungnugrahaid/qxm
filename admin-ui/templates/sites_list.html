@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Sites</h1>
+  <p style="color:#6b7280; font-size:0.9rem;">
+    Sites are auto-discovered by the collector the first time it sees a new site on a controller.
+    Assign each one to a customer so router data and UniFi client data can be joined per customer.
+  </p>
+
+  <table>
+    <tr>
+      <th>Controller</th>
+      <th>Site (UniFi name)</th>
+      <th>Discovered</th>
+      <th>Customer</th>
+      <th></th>
+    </tr>
+    {% for s in sites %}
+    <tr>
+      <td>{{ s.controller_name or "—" }}</td>
+      <td>{{ s.unifi_site_name }}</td>
+      <td>{{ s.discovered_at }}</td>
+      <td>
+        {% if s.customer_name %}
+          {{ s.customer_name }}
+        {% else %}
+          <span class="badge offline">unassigned</span>
+        {% endif %}
+      </td>
+      <td>
+        <form class="inline" method="post" action="/sites/{{ s.id }}/assign" style="display:flex; gap:0.4rem;">
+          <select name="customer_id" required>
+            <option value="" disabled {% if not s.customer_id %}selected{% endif %}>Choose customer…</option>
+            {% for c in customers %}
+              <option value="{{ c.id }}" {% if s.customer_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn primary" type="submit">Assign</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  {% if not sites %}
+    <p>No sites discovered yet — the collector populates this once it's polled at least one controller.</p>
+  {% endif %}
+{% endblock %}

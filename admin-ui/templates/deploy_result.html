@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Deploy results</h1>
+  <table>
+    <tr><th>Router</th><th>Result</th></tr>
+    {% for r in results %}
+    <tr>
+      <td>{{ r.identity_name }}</td>
+      <td class="{{ 'result-ok' if r.ok else 'result-fail' }}">
+        {{ "OK" if r.ok else "FAILED" }} — {{ r.detail }}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p><a class="btn" href="/">Back to routers</a></p>
+{% endblock %}
