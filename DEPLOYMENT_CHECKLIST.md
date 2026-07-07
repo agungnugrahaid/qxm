@@ -10,6 +10,7 @@ Everything from the "beyond hardware" list is now in the stack. Most of it works
 - **`deploy/qoe-pilot.service`** — systemd unit so the stack survives a VM reboot.
 - **`watchdog/`** — a small container polling `ingestion-api` and `admin-ui`'s `/health` endpoints, posting to a webhook after 3 consecutive failures.
 - **Docker healthchecks** added to `ingestion-api` and `admin-ui`.
+- **`sftp`/`config-snapshot-watcher`** — daily RouterOS config snapshots (`/export compact`), pushed via SFTP (not HTTP — RouterOS's `/file get contents` silently fails above a size threshold most real router configs exceed; SFTP transfers the file directly from flash instead) and browsable/diffable from admin-ui's `/config-snapshots/{router_id}`.
 
 ## Placeholders you need to fill in before this is actually live
 
@@ -19,9 +20,14 @@ Everything from the "beyond hardware" list is now in the stack. Most of it works
    docker compose run --rm caddy caddy hash-password
    ```
    and paste the output in place of each placeholder.
-3. **`.env`** — set `WEBHOOK_URL` to a real Slack/Discord incoming webhook if you want watchdog alerts delivered somewhere; leave blank to just have it log locally.
-4. **`deploy/qoe-pilot.service`** — adjust `WorkingDirectory` if you deploy the project somewhere other than `/opt/qoe-pilot`.
+3. **`.env`** — copy from `.env.example` and fill in real values. Set `WEBHOOK_URL` to a real Slack/Discord incoming webhook if you want watchdog alerts delivered somewhere; leave blank to just have it log locally.
+4. **`deploy/qoe-pilot.service`** — adjust `WorkingDirectory` if you deploy the project somewhere other than where this checkout actually lives.
 5. **Off-host backup copy** — `pg-backup` writes to a local Docker volume on the same VM. That protects against database corruption but not against losing the whole VM — worth adding a cron job or object-storage sync (e.g. `rclone` to S3/Backblaze) to copy the `pg_backups` volume off-host periodically. Not included here since it depends on what storage you already have access to.
+6. **SFTP firewall allowlist** — the `sftp` service's port (`SFTP_PORT` in `.env`, default 2222) is otherwise open to the whole internet, and *will* get found and brute-forced within days (confirmed in practice, not hypothetical). Set `SFTP_ALLOWED_CIDRS` in `.env` to your network's real IP ranges, then run:
+   ```
+   sudo bash deploy/setup-sftp-firewall.sh
+   ```
+   Re-run this any time `SFTP_ALLOWED_CIDRS` changes (e.g. onboarding a router outside your existing ranges). UFW alone does not work for this — see the script's comments for why (Docker's own port-publishing rules bypass UFW's normal filtering).
 
 ## What's intentionally still open
 

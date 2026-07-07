@@ -1,7 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
   <h1>Config diff</h1>
-  <p><a class="btn" href="/config-snapshots/{{ router_id }}">Back to config history</a></p>
+  <p>
+    <a class="btn" href="/config-snapshots/{{ router_id }}">Back to config history</a>
+    {% if older_timestamp %}
+      <a class="btn" href="/config-snapshots/{{ router_id }}/{{ older_timestamp }}/diff">&larr; Older</a>
+    {% else %}
+      <span class="btn" style="opacity: 0.4; cursor: default;">&larr; Older</span>
+    {% endif %}
+    {% if newer_timestamp %}
+      <a class="btn" href="/config-snapshots/{{ router_id }}/{{ newer_timestamp }}/diff">Newer &rarr;</a>
+    {% else %}
+      <span class="btn" style="opacity: 0.4; cursor: default;">Newer &rarr;</span>
+    {% endif %}
+  </p>
 
   {% if diff_html is none %}
     <p>No earlier snapshot to compare against — this is the first one captured for this router.</p>

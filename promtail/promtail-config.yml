@@ -9,19 +9,9 @@ clients:
   - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
-  # MikroTik routers (and anything else) sending remote syslog here.
-  # Point RouterOS's remote logging action at <this-server-ip>:1514/udp.
-  - job_name: mikrotik_syslog
-    syslog:
-      listen_address: 0.0.0.0:1514
-      listen_protocol: udp
-      labels:
-        job: mikrotik_syslog
-    relabel_configs:
-      - source_labels: ["__syslog_message_hostname"]
-        target_label: host
-      - source_labels: ["__syslog_message_severity"]
-        target_label: severity
+  # MikroTik syslog is handled by the separate syslog-forwarder service
+  # (UDP -> Loki push directly), not Promtail's syslog scrape target --
+  # see docker-compose.yml for why.
 
   # Your own stack's container logs (ingestion-api, collector, etc.)
   - job_name: docker_containers
@@ -32,3 +22,9 @@ scrape_configs:
       - source_labels: ["__meta_docker_container_name"]
         regex: "/(.*)"
         target_label: container
+      # docker_sd_configs has no static `labels:` block (unlike syslog
+      # above) -- without this, entries only ever get a `container`
+      # label, never `job`, so a `{job="docker_containers"}` query (the
+      # one documented in LOGGING_AND_ALERTS.md) silently returns nothing.
+      - target_label: job
+        replacement: docker_containers

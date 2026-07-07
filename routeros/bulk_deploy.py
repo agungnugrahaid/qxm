@@ -39,6 +39,10 @@ SFTP_CONFIG = {
     "user": os.environ.get("SFTP_USER", "configupload"),
     "password": os.environ.get("SFTP_PASSWORD", "changeme"),
 }
+SYSLOG_CONFIG = {
+    "host": os.environ.get("SYSLOG_HOST", "monitor.yourisp.com"),
+    "port": os.environ.get("SYSLOG_PORT", "1514"),
+}
 
 
 def ensure_router_row(pg_conn, row, new_token):
@@ -100,8 +104,15 @@ def main():
             identity_name = row.get("identity_name")
             try:
                 router = ensure_router_row(pg_conn, row, secrets.token_hex(24))
-                push_to_router(router, INGEST_BASE_URL, metrics_templates, firmware_tpl, SFTP_CONFIG)
-                print(f"[{identity_name}] deployed OK (router_id={router['id']})")
+                actual_identity = push_to_router(router, INGEST_BASE_URL, metrics_templates, firmware_tpl, SFTP_CONFIG, SYSLOG_CONFIG)
+                if actual_identity != router["identity_name"]:
+                    cur = pg_conn.cursor()
+                    cur.execute("UPDATE routers SET identity_name = %s WHERE id = %s", (actual_identity, router["id"]))
+                    pg_conn.commit()
+                    cur.close()
+                    print(f"[{identity_name}] deployed OK (router_id={router['id']}, identity_name synced: {identity_name!r} -> {actual_identity!r})")
+                else:
+                    print(f"[{identity_name}] deployed OK (router_id={router['id']})")
                 ok += 1
             except Exception as e:
                 print(f"[{identity_name}] FAILED — {e}", file=sys.stderr)

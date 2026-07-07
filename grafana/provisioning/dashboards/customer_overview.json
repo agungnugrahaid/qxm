@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 3,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -235,7 +235,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 51
+        "y": 59
       },
       "panels": []
     },
@@ -251,7 +251,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 52
+        "y": 60
       },
       "fieldConfig": {
         "defaults": {
@@ -287,7 +287,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 52
+        "y": 60
       },
       "fieldConfig": {
         "defaults": {
@@ -323,7 +323,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 60
+        "y": 68
       },
       "fieldConfig": {
         "defaults": {},
@@ -445,6 +445,38 @@
           "refId": "A",
           "format": "table",
           "rawSql": "SELECT r.id AS router_id, r.identity_name AS \"Router\", cs.time AS \"Captured\", cs.size_bytes AS \"Size (bytes)\" FROM router_config_snapshots cs JOIN routers r ON r.id = cs.router_id WHERE r.customer_id = $customer_id ORDER BY cs.time DESC LIMIT 20"
+        }
+      ]
+    },
+    {
+      "id": 102,
+      "type": "logs",
+      "title": "Router Logs - $router",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 51
+      },
+      "repeat": "router",
+      "repeatDirection": "v",
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none",
+        "enableLogDetails": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{job=\"mikrotik_syslog\", host=\"${router:text}\"}"
         }
       ]
     }

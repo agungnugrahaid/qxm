@@ -51,6 +51,10 @@ SFTP_CONFIG = {
     "user": os.environ.get("SFTP_USER", "configupload"),
     "password": os.environ.get("SFTP_PASSWORD", "changeme"),
 }
+SYSLOG_CONFIG = {
+    "host": os.environ.get("SYSLOG_HOST", "monitor.yourisp.com"),
+    "port": os.environ.get("SYSLOG_PORT", "1514"),
+}
 
 app = FastAPI(title="QoE Fleet Admin")
 templates = Jinja2Templates(directory="templates")
@@ -166,6 +170,27 @@ def update_router(
     return RedirectResponse("/", status_code=303)
 
 
+def sync_identity_name(router_id, current_identity, actual_identity):
+    """
+    Keeps routers.identity_name in sync with the router's real RouterOS
+    identity after a successful deploy. Admin-entered values can drift
+    from what's actually configured on the device -- confirmed in
+    practice (MELIA/KESBANG had been onboarded with a shortened/friendly
+    name instead of the router's exact identity) -- and the Loki `host`
+    label used for per-router log correlation always reflects the real
+    identity, not our record of it. Returns the new name if it changed,
+    None if it already matched.
+    """
+    if actual_identity == current_identity:
+        return None
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE routers SET identity_name = %s WHERE id = %s", (actual_identity, router_id))
+    conn.commit()
+    conn.close()
+    return actual_identity
+
+
 @app.post("/routers/{router_id}/deploy")
 def deploy_router(request: Request, router_id: int):
     conn = get_conn()
@@ -176,8 +201,10 @@ def deploy_router(request: Request, router_id: int):
 
     results = []
     try:
-        push_to_router(router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TPL, SFTP_CONFIG)
-        results.append({"identity_name": router["identity_name"], "ok": True, "detail": "deployed"})
+        actual_identity = push_to_router(router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TPL, SFTP_CONFIG, SYSLOG_CONFIG)
+        renamed_to = sync_identity_name(router_id, router["identity_name"], actual_identity)
+        detail = "deployed" if not renamed_to else f"deployed (identity_name synced: {router['identity_name']!r} -> {renamed_to!r})"
+        results.append({"identity_name": renamed_to or router["identity_name"], "ok": True, "detail": detail})
     except Exception as e:
         results.append({"identity_name": router["identity_name"], "ok": False, "detail": str(e)})
 
@@ -195,8 +222,10 @@ def deploy_all(request: Request):
     results = []
     for router in routers:
         try:
-            push_to_router(router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TPL, SFTP_CONFIG)
-            results.append({"identity_name": router["identity_name"], "ok": True, "detail": "deployed"})
+            actual_identity = push_to_router(router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TPL, SFTP_CONFIG, SYSLOG_CONFIG)
+            renamed_to = sync_identity_name(router["id"], router["identity_name"], actual_identity)
+            detail = "deployed" if not renamed_to else f"deployed (identity_name synced: {router['identity_name']!r} -> {renamed_to!r})"
+            results.append({"identity_name": renamed_to or router["identity_name"], "ok": True, "detail": detail})
         except Exception as e:
             results.append({"identity_name": router["identity_name"], "ok": False, "detail": str(e)})
 
@@ -328,6 +357,16 @@ def diff_config_snapshot(request: Request, router_id: int, timestamp: str):
         (router_id, timestamp),
     )
     previous = cur.fetchone()
+    # For prev/next navigation between diffs -- "older" just reuses the
+    # previous snapshot's own timestamp (its diff page compares it against
+    # whatever came before *it*); "newer" needs a separate lookup since we
+    # haven't otherwise fetched anything past `current`.
+    cur.execute(
+        "SELECT time FROM router_config_snapshots "
+        "WHERE router_id = %s AND time > %s ORDER BY time ASC LIMIT 1",
+        (router_id, timestamp),
+    )
+    newer = cur.fetchone()
     conn.close()
 
     diff_html = None
@@ -393,7 +432,13 @@ def diff_config_snapshot(request: Request, router_id: int, timestamp: str):
 
     return templates.TemplateResponse(
         "config_diff.html",
-        {"request": request, "router_id": router_id, "diff_html": diff_html},
+        {
+            "request": request,
+            "router_id": router_id,
+            "diff_html": diff_html,
+            "older_timestamp": previous["time"].isoformat() if previous else None,
+            "newer_timestamp": newer["time"].isoformat() if newer else None,
+        },
     )
 
 
