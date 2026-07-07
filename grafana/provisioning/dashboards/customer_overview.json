@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 32,
+  "version": 51,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -123,8 +123,8 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 12,
-        "y": 1
+        "x": 6,
+        "y": 5
       },
       "fieldConfig": {
         "defaults": {
@@ -183,7 +183,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 13
+        "y": 9
       },
       "fieldConfig": {
         "defaults": {},
@@ -206,7 +206,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 15
       }
     },
     {
@@ -221,7 +221,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 20
+        "y": 16
       },
       "repeat": "router",
       "repeatDirection": "v",
@@ -255,7 +255,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 20
+        "y": 16
       },
       "fieldConfig": {
         "defaults": {
@@ -287,7 +287,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 28
+        "y": 24
       },
       "fieldConfig": {
         "defaults": {},
@@ -314,7 +314,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 28
+        "y": 24
       },
       "repeat": "router",
       "repeatDirection": "v",
@@ -345,10 +345,10 @@
         "uid": "timescaledb"
       },
       "gridPos": {
-        "h": 6,
-        "w": 24,
+        "h": 8,
+        "w": 12,
         "x": 0,
-        "y": 36
+        "y": 32
       },
       "fieldConfig": {
         "defaults": {
@@ -430,9 +430,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 42
+        "w": 12,
+        "x": 12,
+        "y": 32
       },
       "repeat": "router",
       "repeatDirection": "v",
@@ -462,7 +462,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 40
       }
     },
     {
@@ -477,7 +477,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 51
+        "y": 49
       },
       "fieldConfig": {
         "defaults": {
@@ -511,7 +511,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 51
+        "y": 49
       },
       "repeat": "router",
       "repeatDirection": "v",
@@ -545,9 +545,9 @@
       },
       "gridPos": {
         "h": 6,
-        "w": 24,
+        "w": 12,
         "x": 0,
-        "y": 59
+        "y": 57
       },
       "fieldConfig": {
         "defaults": {},
@@ -570,7 +570,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 95
+        "y": 87
       }
     },
     {
@@ -585,7 +585,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 96
+        "y": 88
       },
       "fieldConfig": {
         "defaults": {
@@ -614,7 +614,7 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Avg Signal & Satisfaction",
+      "title": "Avg Signal / Satisfaction / Retry Rate",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
@@ -623,7 +623,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 96
+        "y": 88
       },
       "fieldConfig": {
         "defaults": {
@@ -645,7 +645,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT time_bucket_gapfill('5 minutes', cm.time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz) AS \"time\", avg(cm.signal) AS \"avg_signal\", avg(cm.satisfaction) AS \"avg_satisfaction\" FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND $__timeFilter(cm.time) GROUP BY 1 ORDER BY 1"
+          "rawSql": "SELECT time_bucket_gapfill('5 minutes', cm.time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz) AS \"time\", avg(cm.signal) AS \"avg_signal\", avg(cm.satisfaction) AS \"avg_satisfaction\", 100.0 * sum(cm.tx_retries) / NULLIF(sum(cm.wifi_tx_attempts), 0) AS \"retry_pct\" FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND $__timeFilter(cm.time) GROUP BY 1 ORDER BY 1"
         }
       ]
     },
@@ -661,18 +661,49 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 104
+        "y": 96
       },
       "fieldConfig": {
         "defaults": {},
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Status"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "online": {
+                        "color": "green",
+                        "index": 0
+                      },
+                      "offline": {
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              }
+            ]
+          }
+        ]
       },
       "options": {},
       "targets": [
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT DISTINCT ON (ai.ap_mac) ai.ap_name AS \"AP\", ai.model AS \"Model\", ai.version AS \"Firmware\", ai.cpu_pct AS \"CPU %\", ai.mem_pct AS \"Mem %\", ai.channel_util_2g AS \"2.4G Util\", ai.channel_util_5g AS \"5G Util\", ai.time AS \"As of\" FROM ap_inventory ai WHERE ai.site_id IN (SELECT id FROM sites WHERE customer_id = $customer_id) ORDER BY ai.ap_mac, ai.time DESC"
+          "rawSql": "SELECT * FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name AS \"AP\", CASE WHEN ai.state = 1 THEN 'online' ELSE 'offline' END AS \"Status\", ai.satisfaction AS \"Satisfaction\", ai.num_sta AS \"Clients\", ai.model AS \"Model\", ai.version AS \"Firmware\", ai.cpu_pct AS \"CPU %\", ai.mem_pct AS \"Mem %\", ai.channel_util_2g AS \"2.4G Util\", ai.channel_util_5g AS \"5G Util\", ai.time AS \"As of\" FROM ap_inventory ai WHERE ai.site_id IN (SELECT id FROM sites WHERE customer_id = $customer_id) ORDER BY ai.ap_mac, ai.time DESC) latest ORDER BY \"Status\", \"AP\""
         }
       ]
     },
@@ -684,7 +715,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 79
+        "y": 71
       }
     },
     {
@@ -699,7 +730,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 80
+        "y": 72
       },
       "repeat": "router",
       "repeatDirection": "v",
@@ -727,7 +758,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 88
+        "y": 80
       }
     },
     {
@@ -742,7 +773,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 89
+        "y": 81
       },
       "fieldConfig": {
         "defaults": {},
@@ -779,7 +810,7 @@
     {
       "id": 111,
       "type": "stat",
-      "title": "Conntrack Usage % (worst router)",
+      "title": "Conntrack Usage % (peak)",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
@@ -788,7 +819,7 @@
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 5
+        "y": 41
       },
       "fieldConfig": {
         "defaults": {
@@ -836,49 +867,6 @@
       ]
     },
     {
-      "id": 112,
-      "type": "stat",
-      "title": "Worst Router Conntrack (used / max)",
-      "datasource": {
-        "type": "postgres",
-        "uid": "timescaledb"
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 9
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "n/a"
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "/.*/",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "table",
-          "rawSql": "SELECT conntrack_count || ' / ' || conntrack_max AS \"value\" FROM (SELECT DISTINCT ON (rm.router_id) rm.conntrack_count, rm.conntrack_max, round(100.0 * rm.conntrack_count / NULLIF(rm.conntrack_max,0), 1) AS pct FROM router_metrics rm JOIN routers r ON r.id = rm.router_id WHERE r.customer_id = $customer_id ORDER BY rm.router_id, rm.time DESC) latest ORDER BY pct DESC NULLS LAST LIMIT 1"
-        }
-      ]
-    },
-    {
       "id": 108,
       "type": "stat",
       "title": "Avg Packet Loss %",
@@ -889,8 +877,8 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 6,
-        "y": 1
+        "x": 0,
+        "y": 5
       },
       "fieldConfig": {
         "defaults": {
@@ -948,8 +936,8 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 18,
-        "y": 1
+        "x": 12,
+        "y": 5
       },
       "fieldConfig": {
         "defaults": {
@@ -1006,9 +994,9 @@
       },
       "gridPos": {
         "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 65
+        "w": 12,
+        "x": 12,
+        "y": 57
       },
       "fieldConfig": {
         "defaults": {},
@@ -1066,7 +1054,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 71
+        "y": 63
       },
       "repeat": "router",
       "repeatDirection": "v",
@@ -1085,6 +1073,630 @@
           "refId": "A",
           "format": "time_series",
           "rawSql": "SELECT time_bucket_gapfill('5 minutes', time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz) AS \"time\", gauge_name AS metric, avg(CASE WHEN value ~ '^[0-9.]+$' THEN value::numeric END) AS value FROM health_metrics WHERE router_id = $router AND $__timeFilter(time) AND (gauge_name LIKE '%temperature%' OR gauge_name LIKE '%speed%') GROUP BY 1, gauge_name ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 115,
+      "type": "table",
+      "title": "Degraded Wi-Fi Clients (detail)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 104
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Retry %"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 20
+                    },
+                    {
+                      "color": "red",
+                      "value": 50
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "AP"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Client"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Device"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SSID"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Likely Cause"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 230
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Signal (dBm)"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Noise (dBm)"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SNR (dB)"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Satisfaction"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "TX Rate (Mbps)"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Channel"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "As of"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 190
+              }
+            ]
+          }
+        ]
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "WITH latest AS (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.site_id, cm.ap_mac, ai.ap_name AS ap_name, cm.client_mac, cm.hostname, cm.essid, cm.signal, cm.noise, (cm.signal - cm.noise) AS snr, cm.satisfaction, 100.0 * cm.tx_retries / NULLIF(cm.wifi_tx_attempts, 0) AS retry_pct, cm.tx_rate / 1000 AS tx_rate_mbps, cm.channel, cm.time FROM client_metrics cm JOIN sites s ON s.id = cm.site_id LEFT JOIN LATERAL (SELECT ap_name FROM ap_inventory WHERE ap_mac = cm.ap_mac ORDER BY time DESC LIMIT 1) ai ON true WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC), problems AS (SELECT *, count(*) OVER (PARTITION BY ap_mac, channel) AS peers_on_same_channel FROM latest WHERE retry_pct > 20 OR satisfaction < 80 OR signal < -75) SELECT ap_name AS \"AP\", client_mac AS \"Client\", hostname AS \"Device\", essid AS \"SSID\", CASE WHEN peers_on_same_channel >= 3 THEN 'Channel congestion (' || peers_on_same_channel || ' affected)' WHEN snr < 15 THEN 'Weak signal / interference' WHEN snr >= 15 AND tx_rate_mbps IS NOT NULL AND tx_rate_mbps < 24 THEN 'Legacy device / rate issue' WHEN retry_pct > 20 THEN 'Elevated retries -- check UniFi UI' ELSE 'Unclear -- check UniFi UI' END AS \"Likely Cause\", signal AS \"Signal (dBm)\", noise AS \"Noise (dBm)\", snr AS \"SNR (dB)\", satisfaction AS \"Satisfaction\", round(retry_pct,1) AS \"Retry %\", tx_rate_mbps AS \"TX Rate (Mbps)\", channel AS \"Channel\", time AS \"As of\" FROM problems ORDER BY retry_pct DESC NULLS LAST"
+        }
+      ]
+    },
+    {
+      "id": 116,
+      "type": "stat",
+      "title": "Degraded Wi-Fi Clients",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "View degraded client detail",
+              "url": "/d/customer-overview/customer-overview?viewPanel=115",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "WITH latest AS (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.signal, cm.noise, cm.satisfaction, 100.0 * cm.tx_retries / NULLIF(cm.wifi_tx_attempts, 0) AS retry_pct FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC) SELECT count(*) AS \"value\" FROM latest WHERE retry_pct > 20 OR satisfaction < 80 OR signal < -75"
+        }
+      ]
+    },
+    {
+      "id": 118,
+      "type": "stat",
+      "title": "AP Uptime %",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "green",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT round(100.0 * count(*) FILTER (WHERE state = 1) / NULLIF(count(*), 0), 1) AS \"value\" FROM (SELECT DISTINCT ON (ai.ap_mac) ai.state FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id WHERE s.customer_id = $customer_id AND ai.time > now() - interval '15 minutes' ORDER BY ai.ap_mac, ai.time DESC) latest"
+        }
+      ]
+    },
+    {
+      "id": 119,
+      "type": "stat",
+      "title": "APs Offline",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT count(*) AS \"value\" FROM (SELECT DISTINCT ON (ai.ap_mac) ai.state FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id WHERE s.customer_id = $customer_id AND ai.time > now() - interval '15 minutes' ORDER BY ai.ap_mac, ai.time DESC) latest WHERE state != 1 OR state IS NULL"
+        }
+      ]
+    },
+    {
+      "id": 121,
+      "type": "stat",
+      "title": "Avg Client Retry %",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 15
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT round(avg(100.0 * tx_retries / NULLIF(wifi_tx_attempts, 0)), 1) AS \"value\" FROM (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.tx_retries, cm.wifi_tx_attempts FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC) latest"
+        }
+      ]
+    },
+    {
+      "id": 122,
+      "type": "stat",
+      "title": "CPU Load % (peak)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT max(cpu_load_pct) AS \"value\" FROM (SELECT DISTINCT ON (rm.router_id) rm.cpu_load_pct FROM router_metrics rm JOIN routers r ON r.id = rm.router_id WHERE r.customer_id = $customer_id ORDER BY rm.router_id, rm.time DESC) latest"
+        }
+      ]
+    },
+    {
+      "id": 123,
+      "type": "stat",
+      "title": "Hardware Faults",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT count(DISTINCT router_id) AS \"value\" FROM (SELECT DISTINCT ON (hm.router_id, hm.gauge_name) hm.router_id, hm.gauge_name, hm.value FROM health_metrics hm JOIN routers r ON r.id = hm.router_id WHERE r.customer_id = $customer_id ORDER BY hm.router_id, hm.gauge_name, hm.time DESC) latest WHERE (gauge_name LIKE 'psu%-state' AND value != 'ok') OR (gauge_name = 'fan-state' AND value != 'ok')"
+        }
+      ]
+    },
+    {
+      "id": 124,
+      "type": "stat",
+      "title": "DHCP Pool Utilization % (peak)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT max(utilization_pct) AS \"value\" FROM (SELECT DISTINCT ON (dm.router_id, dm.pool_name) dm.utilization_pct FROM dhcp_pool_metrics dm JOIN routers r ON r.id = dm.router_id WHERE r.customer_id = $customer_id ORDER BY dm.router_id, dm.pool_name, dm.time DESC) latest"
         }
       ]
     }

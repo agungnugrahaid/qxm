@@ -87,16 +87,29 @@ async def poll_site(session, ctrl, site_name, site_id, conn):
         data = await resp.json()
 
     now = datetime.now(timezone.utc)
+    # tx_retries/wifi_tx_attempts give a retry rate -- the wireless
+    # equivalent of the wired-side interface error/collision metrics.
+    # Signal strength alone doesn't show RF congestion the way retries
+    # do (a client can have great signal and still retry constantly on a
+    # crowded channel). tx_rate/rx_rate/noise/channel/essid round out the
+    # picture: noise turns raw signal into a true SNR reading, and
+    # tx_rate catches a client stuck at a degraded PHY rate even when
+    # signal looks fine.
     rows = [
-        (now, site_id, c.get("mac"), c.get("ap_mac"), c.get("signal"), c.get("satisfaction"), c.get("radio"))
+        (
+            now, site_id, c.get("mac"), c.get("ap_mac"), c.get("signal"), c.get("satisfaction"), c.get("radio"),
+            c.get("tx_retries"), c.get("wifi_tx_attempts"), c.get("tx_rate"), c.get("rx_rate"),
+            c.get("noise"), c.get("channel"), c.get("essid"), c.get("is_wired"), c.get("hostname"),
+        )
         for c in data.get("data", [])
     ]
 
     if rows:
         cur = conn.cursor()
         cur.executemany(
-            "INSERT INTO client_metrics (time, site_id, client_mac, ap_mac, signal, satisfaction, radio) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO client_metrics (time, site_id, client_mac, ap_mac, signal, satisfaction, radio, "
+            "tx_retries, wifi_tx_attempts, tx_rate, rx_rate, noise, channel, essid, is_wired, hostname) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             rows,
         )
         conn.commit()
@@ -112,6 +125,11 @@ async def poll_site_devices(session, ctrl, site_name, site_id, conn):
     AP health anyway. Field names below match a standard software
     Controller/UDM response; double check against your controller version
     if a field comes back empty.
+
+    `state` gives direct AP up/down detection (1 = connected, confirmed
+    live) instead of inferring an outage from an AP silently vanishing
+    from client data. `satisfaction`/`num_sta` are UniFi's own per-AP
+    scores, riding along the same request.
     """
     api_prefix = f"{ctrl['base_url']}/proxy/network" if ctrl["is_unifi_os"] else ctrl["base_url"]
     url = f"{api_prefix}/api/s/{site_name}/stat/device"
@@ -143,14 +161,19 @@ async def poll_site_devices(session, ctrl, site_name, site_id, conn):
             stats.get("mem"),
             cu_2g,
             cu_5g,
+            dev.get("state"),
+            dev.get("satisfaction"),
+            dev.get("num_sta"),
+            dev.get("uptime"),
         ))
 
     if rows:
         cur = conn.cursor()
         cur.executemany(
             "INSERT INTO ap_inventory "
-            "(time, site_id, ap_mac, ap_name, model, version, cpu_pct, mem_pct, channel_util_2g, channel_util_5g) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "(time, site_id, ap_mac, ap_name, model, version, cpu_pct, mem_pct, channel_util_2g, channel_util_5g, "
+            "state, satisfaction, num_sta, uptime) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             rows,
         )
         conn.commit()
@@ -162,12 +185,20 @@ async def poll_site_devices(session, ctrl, site_name, site_id, conn):
 async def poll_controller(ctrl, conn):
     login_url = f"{ctrl['base_url']}/api/auth/login" if ctrl["is_unifi_os"] else f"{ctrl['base_url']}/api/login"
 
-    async with aiohttp.ClientSession() as session:
-        await session.post(
+    # aiohttp's default cookie jar silently drops cookies for IP-address
+    # hosts (only accepts them for real domain names) unless created with
+    # unsafe=True -- confirmed live: login succeeded and returned a valid
+    # session cookie, but every subsequent request came back 401
+    # LoginRequired because the cookie was never actually stored, since
+    # controllers are commonly reached by bare IP rather than a hostname.
+    jar = aiohttp.CookieJar(unsafe=True)
+    async with aiohttp.ClientSession(cookie_jar=jar) as session:
+        login_resp = await session.post(
             login_url,
             json={"username": ctrl["api_user"], "password": ctrl["api_password"]},
             ssl=SSL_CTX,
         )
+        login_resp.raise_for_status()
 
         controller_id = ensure_controller(conn, ctrl)
         tasks = []

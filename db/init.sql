@@ -60,7 +60,16 @@ CREATE TABLE client_metrics (
     ap_mac TEXT,
     signal INT,
     satisfaction INT,
-    radio TEXT
+    radio TEXT,
+    tx_retries BIGINT,
+    wifi_tx_attempts BIGINT,
+    tx_rate BIGINT,
+    rx_rate BIGINT,
+    noise INT,
+    channel INT,
+    essid TEXT,
+    is_wired BOOLEAN,
+    hostname TEXT
 );
 SELECT create_hypertable('client_metrics', 'time');
 CREATE INDEX ON client_metrics (site_id, time DESC);
@@ -177,7 +186,11 @@ CREATE TABLE ap_inventory (
     cpu_pct NUMERIC,
     mem_pct NUMERIC,
     channel_util_2g NUMERIC,
-    channel_util_5g NUMERIC
+    channel_util_5g NUMERIC,
+    state INT,
+    satisfaction INT,
+    num_sta INT,
+    uptime BIGINT
 );
 SELECT create_hypertable('ap_inventory', 'time');
 CREATE INDEX ON ap_inventory (site_id, time DESC);
