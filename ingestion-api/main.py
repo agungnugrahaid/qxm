@@ -40,6 +40,7 @@ class PingResult(BaseModel):
     rtt_avg_ms: Optional[float] = None
     rtt_max_ms: Optional[float] = None
     packet_loss_pct: Optional[float] = None
+    jitter_ms: Optional[float] = None
 
 
 class DhcpPoolResult(BaseModel):
@@ -60,6 +61,25 @@ class CpuCoreResult(BaseModel):
     load_pct: float
 
 
+class InterfaceResult(BaseModel):
+    interface: str
+    running: Optional[bool] = None
+    disabled: Optional[bool] = None
+    rx_fcs_error: Optional[int] = None
+    rx_too_short: Optional[int] = None
+    rx_too_long: Optional[int] = None
+    rx_overflow: Optional[int] = None
+    tx_collision: Optional[int] = None
+    tx_late_collision: Optional[int] = None
+    tx_underrun: Optional[int] = None
+
+
+class HealthGaugeResult(BaseModel):
+    name: str
+    value: Optional[str] = None
+    unit: Optional[str] = None
+
+
 class RouterPayload(BaseModel):
     router_id: str
     rx_bytes: int
@@ -70,10 +90,14 @@ class RouterPayload(BaseModel):
     ram_total_bytes: Optional[int] = None
     disk_used_bytes: Optional[int] = None
     disk_total_bytes: Optional[int] = None
+    conntrack_count: Optional[int] = None
+    conntrack_max: Optional[int] = None
     pings: List[PingResult] = []
     dhcp_pools: List[DhcpPoolResult] = []
     uplinks: List[UplinkResult] = []
     cpu_cores: List[CpuCoreResult] = []
+    interfaces: List[InterfaceResult] = []
+    health: List[HealthGaugeResult] = []
 
 
 class FirmwarePayload(BaseModel):
@@ -83,6 +107,9 @@ class FirmwarePayload(BaseModel):
     upgrade_firmware: Optional[str] = None
     architecture: Optional[str] = None
     board_name: Optional[str] = None
+    update_channel: Optional[str] = None
+    latest_routeros_version: Optional[str] = None
+    update_status: Optional[str] = None
 
 
 def get_conn():
@@ -116,19 +143,20 @@ def ingest(payload: RouterPayload, authorization: str = Header(None)):
 
         cur.execute(
             "INSERT INTO router_metrics "
-            "(time, router_id, rx_bytes, tx_bytes, uptime, cpu_load_pct, ram_used_bytes, ram_total_bytes, disk_used_bytes, disk_total_bytes) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "(time, router_id, rx_bytes, tx_bytes, uptime, cpu_load_pct, ram_used_bytes, ram_total_bytes, disk_used_bytes, disk_total_bytes, conntrack_count, conntrack_max) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (now, router_id, payload.rx_bytes, payload.tx_bytes, payload.uptime,
              payload.cpu_load_pct, payload.ram_used_bytes, payload.ram_total_bytes,
-             payload.disk_used_bytes, payload.disk_total_bytes),
+             payload.disk_used_bytes, payload.disk_total_bytes,
+             payload.conntrack_count, payload.conntrack_max),
         )
 
         for p in payload.pings:
             cur.execute(
                 "INSERT INTO path_metrics "
-                "(time, router_id, target_name, target_host, rtt_min_ms, rtt_avg_ms, rtt_max_ms, packet_loss_pct) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                (now, router_id, p.target_name, p.target_host, p.rtt_min_ms, p.rtt_avg_ms, p.rtt_max_ms, p.packet_loss_pct),
+                "(time, router_id, target_name, target_host, rtt_min_ms, rtt_avg_ms, rtt_max_ms, packet_loss_pct, jitter_ms) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (now, router_id, p.target_name, p.target_host, p.rtt_min_ms, p.rtt_avg_ms, p.rtt_max_ms, p.packet_loss_pct, p.jitter_ms),
             )
 
         for pool in payload.dhcp_pools:
@@ -158,6 +186,24 @@ def ingest(payload: RouterPayload, authorization: str = Header(None)):
                 (now, router_id, c.core, c.load_pct),
             )
 
+        for iface in payload.interfaces:
+            cur.execute(
+                "INSERT INTO interface_metrics "
+                "(time, router_id, interface_name, running, disabled, rx_fcs_error, rx_too_short, "
+                "rx_too_long, rx_overflow, tx_collision, tx_late_collision, tx_underrun) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (now, router_id, iface.interface, iface.running, iface.disabled,
+                 iface.rx_fcs_error, iface.rx_too_short, iface.rx_too_long, iface.rx_overflow,
+                 iface.tx_collision, iface.tx_late_collision, iface.tx_underrun),
+            )
+
+        for gauge in payload.health:
+            cur.execute(
+                "INSERT INTO health_metrics (time, router_id, gauge_name, value, unit) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (now, router_id, gauge.name, gauge.value, gauge.unit),
+            )
+
         cur.execute("UPDATE routers SET last_seen_at = %s WHERE id = %s", (now, router_id))
         conn.commit()
         return {"status": "ok"}
@@ -174,10 +220,11 @@ def ingest_firmware(payload: FirmwarePayload, authorization: str = Header(None))
         now = datetime.now(timezone.utc)
 
         cur.execute(
-            "INSERT INTO router_firmware (time, router_id, routeros_version, current_firmware, upgrade_firmware, architecture, board_name) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO router_firmware (time, router_id, routeros_version, current_firmware, upgrade_firmware, architecture, board_name, update_channel, latest_routeros_version, update_status) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (now, router_id, payload.routeros_version, payload.current_firmware, payload.upgrade_firmware,
-             payload.architecture, payload.board_name),
+             payload.architecture, payload.board_name,
+             payload.update_channel, payload.latest_routeros_version, payload.update_status),
         )
         conn.commit()
         return {"status": "ok"}

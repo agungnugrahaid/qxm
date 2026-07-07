@@ -75,7 +75,9 @@ CREATE TABLE router_metrics (
     ram_used_bytes BIGINT,
     ram_total_bytes BIGINT,
     disk_used_bytes BIGINT,
-    disk_total_bytes BIGINT
+    disk_total_bytes BIGINT,
+    conntrack_count BIGINT,
+    conntrack_max BIGINT
 );
 SELECT create_hypertable('router_metrics', 'time');
 CREATE INDEX ON router_metrics (router_id, time DESC);
@@ -102,7 +104,8 @@ CREATE TABLE path_metrics (
     rtt_min_ms NUMERIC,
     rtt_avg_ms NUMERIC,
     rtt_max_ms NUMERIC,
-    packet_loss_pct NUMERIC
+    packet_loss_pct NUMERIC,
+    jitter_ms NUMERIC
 );
 SELECT create_hypertable('path_metrics', 'time');
 CREATE INDEX ON path_metrics (router_id, time DESC);
@@ -142,7 +145,10 @@ CREATE TABLE router_firmware (
     current_firmware TEXT,
     upgrade_firmware TEXT,
     architecture TEXT,
-    board_name TEXT
+    board_name TEXT,
+    update_channel TEXT,
+    latest_routeros_version TEXT,
+    update_status TEXT
 );
 SELECT create_hypertable('router_firmware', 'time');
 CREATE INDEX ON router_firmware (router_id, time DESC);
@@ -175,6 +181,46 @@ CREATE TABLE ap_inventory (
 );
 SELECT create_hypertable('ap_inventory', 'time');
 CREATE INDEX ON ap_inventory (site_id, time DESC);
+
+-- Physical interface (ether/SFP) health: link state + error/drop counters,
+-- one row per physical port per push. Lets QoE alerting catch cabling/SFP
+-- degradation and duplex mismatches that ping-based path_metrics can't see
+-- (a link can pass a 5-packet ping test fine while still shedding frames
+-- under real load).
+CREATE TABLE interface_metrics (
+    time TIMESTAMPTZ NOT NULL,
+    router_id INT REFERENCES routers(id),
+    interface_name TEXT NOT NULL,
+    running BOOLEAN,
+    disabled BOOLEAN,
+    rx_fcs_error BIGINT,
+    rx_too_short BIGINT,
+    rx_too_long BIGINT,
+    rx_overflow BIGINT,
+    tx_collision BIGINT,
+    tx_late_collision BIGINT,
+    tx_underrun BIGINT
+);
+SELECT create_hypertable('interface_metrics', 'time');
+CREATE INDEX ON interface_metrics (router_id, interface_name, time DESC);
+
+-- System health sensors (temperature, fan speed/state, PSU state,
+-- voltage, current, power draw). Flexible key/value shape rather than
+-- fixed columns, since RouterOS 6 and 7 expose genuinely different
+-- sensor sets (v6: voltage/current/temperature/cpu-temperature/
+-- power-consumption/fan1-speed as fixed singleton properties; v7:
+-- a variable list of named "gauges" -- per-component temps, fan
+-- speeds/state, PSU state -- that varies by hardware). Value is TEXT
+-- since gauges mix numeric readings ("41") and status strings ("ok").
+CREATE TABLE health_metrics (
+    time TIMESTAMPTZ NOT NULL,
+    router_id INT REFERENCES routers(id),
+    gauge_name TEXT NOT NULL,
+    value TEXT,
+    unit TEXT
+);
+SELECT create_hypertable('health_metrics', 'time');
+CREATE INDEX ON health_metrics (router_id, gauge_name, time DESC);
 
 -- Compression + retention on the high-volume hypertables — see
 -- db/migrations/002_compression_retention.sql for the same policies with
@@ -211,6 +257,14 @@ SELECT add_retention_policy('path_metrics', INTERVAL '90 days', if_not_exists =>
 ALTER TABLE dhcp_pool_metrics SET (timescaledb.compress, timescaledb.compress_segmentby = 'router_id');
 SELECT add_compression_policy('dhcp_pool_metrics', INTERVAL '3 days', if_not_exists => true);
 SELECT add_retention_policy('dhcp_pool_metrics', INTERVAL '90 days', if_not_exists => true);
+
+ALTER TABLE interface_metrics SET (timescaledb.compress, timescaledb.compress_segmentby = 'router_id, interface_name');
+SELECT add_compression_policy('interface_metrics', INTERVAL '3 days', if_not_exists => true);
+SELECT add_retention_policy('interface_metrics', INTERVAL '90 days', if_not_exists => true);
+
+ALTER TABLE health_metrics SET (timescaledb.compress, timescaledb.compress_segmentby = 'router_id, gauge_name');
+SELECT add_compression_policy('health_metrics', INTERVAL '3 days', if_not_exists => true);
+SELECT add_retention_policy('health_metrics', INTERVAL '90 days', if_not_exists => true);
 
 -- Seed a couple of pilot test rows for the CPE side so the ingestion API
 -- has something to authenticate against right away. Replace with your own

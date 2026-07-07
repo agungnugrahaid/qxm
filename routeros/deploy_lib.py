@@ -102,7 +102,7 @@ def _resolve_ip(host):
         return socket.gethostbyname(host)
 
 
-def upsert_syslog_forwarding(api, remote_host, remote_port, major_version):
+def upsert_syslog_forwarding(api, remote_host, remote_port):
     """
     Points RouterOS's remote syslog action at our syslog-forwarder service
     (see docker-compose.yml / syslog-forwarder/) and makes sure it's wired
@@ -118,22 +118,32 @@ def upsert_syslog_forwarding(api, remote_host, remote_port, major_version):
     below so re-running deploy on an already-fixed router doesn't leave
     dead config behind.
 
-    v6 has no `remote-log-format` or `remote-protocol` property at all
-    (unlike v7's default/syslog/cef enum and explicit udp/tcp choice) --
-    it only ever sends UDP, and uses a separate boolean `bsd-syslog`
-    field for the format instead. Passing either fails outright on v6
-    with "unknown parameter". Both versions settle on the same wire
+    Some RouterOS builds' `remote` logging-action schema has no
+    `remote-log-format`/`remote-protocol` property at all (unlike others'
+    default/syslog/cef enum and explicit udp/tcp choice) -- they only
+    ever send UDP, and use a separate boolean `bsd-syslog` field for the
+    format instead. Passing either fails outright with "unknown
+    parameter" on those builds. This is NOT a clean function of RouterOS
+    major version -- confirmed in practice: 7.20.4 has the new-style
+    fields, but 7.16.1 doesn't and uses the old (v6-style) schema, so
+    branching on major_version alone (an earlier version of this
+    function did exactly that) breaks on some v7 routers. Detect by
+    inspecting the router's own built-in default 'remote' action instead
+    of trusting the version number. Both schemas settle on the same wire
     format our syslog-forwarder expects (BSD/RFC3164-style `<PRI>...`
     framing).
     """
     actions = list(api(cmd="/system/logging/action/print"))
     match = next((a for a in actions if a.get("name") == "remoteloki"), None)
+    default_remote = next((a for a in actions if a.get("name") == "remote"), None)
+    supports_new_style = bool(default_remote) and "remote-protocol" in default_remote
+
     action_kwargs = {
         "target": "remote",
         "remote": _resolve_ip(remote_host),
         "remote-port": str(remote_port),
     }
-    if major_version >= 7:
+    if supports_new_style:
         action_kwargs["remote-protocol"] = "udp"
         action_kwargs["remote-log-format"] = "syslog"
     else:
@@ -237,7 +247,7 @@ def push_to_router(router, ingest_base_url, metrics_templates, firmware_tpl, sft
         upsert_script(api, "qoe-push-firmware", firmware_src)
         upsert_scheduler(api, "qoe-push-metrics", "qoe-push-metrics", "00:05:00")
         upsert_scheduler(api, "qoe-push-firmware", "qoe-push-firmware", "1d")
-        upsert_syslog_forwarding(api, syslog_config["host"], syslog_config["port"], major_version)
+        upsert_syslog_forwarding(api, syslog_config["host"], syslog_config["port"])
         # Best-effort -- the scheduled cycle will still deliver data on its
         # own even if this immediate kick fails (e.g. a slow/flaky router
         # timing out on the run command), so don't let that failure make

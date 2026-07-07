@@ -19,9 +19,32 @@
 :local architecture [/system resource get architecture-name]
 :local boardName [/system resource get board-name]
 
+# --- RouterOS package update check -- distinct from the routerboard
+# bootloader firmware above (current-firmware/upgrade-firmware, which
+# almost always match each other and don't tell you if a newer *RouterOS
+# version* exists). check-for-updates is async against MikroTik's update
+# servers, hence the :delay before reading the result. Confirmed live
+# across the fleet: works and reports real channel/latest-version/status
+# on routers with real internet access; on at least one router with a
+# restricted network path, status comes back "ERROR: no internet
+# connection" instead -- surfaced as-is rather than silently blank, since
+# that's itself useful information.
+:local updateChannel ""
+:local updateLatest ""
+:local updateStatus ""
+:do {
+    /system package update check-for-updates
+    :delay 3
+    :set updateChannel [/system package update get channel]
+    :set updateStatus [/system package update get status]
+    :do { :set updateLatest [/system package update get latest-version] } on-error={ }
+} on-error={ }
+
 :local payload ("{\"router_id\":\"$routerId\",\"routeros_version\":\"$rosVersion\"," . \
     "\"current_firmware\":\"$currentFw\",\"upgrade_firmware\":\"$upgradeFw\"," . \
-    "\"architecture\":\"$architecture\",\"board_name\":\"$boardName\"}")
+    "\"architecture\":\"$architecture\",\"board_name\":\"$boardName\"," . \
+    "\"update_channel\":\"$updateChannel\",\"latest_routeros_version\":\"$updateLatest\"," . \
+    "\"update_status\":\"$updateStatus\"}")
 
 /tool fetch url=$url http-method=post \
     http-header-field="Content-Type: application/json,Authorization: Bearer $token" \

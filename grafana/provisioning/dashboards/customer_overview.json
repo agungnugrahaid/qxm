@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 3,
+  "version": 32,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -48,16 +48,128 @@
   },
   "panels": [
     {
-      "id": 100,
+      "id": 200,
       "type": "row",
-      "title": "Router / CPE",
+      "title": "Status Overview",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 0
+      }
+    },
+    {
+      "id": 107,
+      "type": "stat",
+      "title": "Routers Offline",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
       },
-      "panels": []
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT count(*) AS \"value\" FROM routers WHERE customer_id = $customer_id AND (last_seen_at IS NULL OR last_seen_at < now() - interval '15 minutes')"
+        }
+      ]
+    },
+    {
+      "id": 109,
+      "type": "stat",
+      "title": "Avg Jitter (ms)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 20
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT avg(jitter) AS \"value\" FROM (SELECT DISTINCT ON (pm.router_id, pm.target_name) pm.jitter_ms AS jitter FROM path_metrics pm JOIN routers r ON r.id = pm.router_id WHERE r.customer_id = $customer_id ORDER BY pm.router_id, pm.target_name, pm.time DESC) latest"
+        }
+      ]
     },
     {
       "id": 1,
@@ -71,7 +183,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 1
+        "y": 13
       },
       "fieldConfig": {
         "defaults": {},
@@ -82,9 +194,20 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT identity_name AS \"Router\", mgmt_host AS \"Mgmt Host\", last_seen_at AS \"Last Seen\", CASE WHEN last_seen_at > now() - interval '15 minutes' THEN 'online' ELSE 'offline' END AS \"Status\" FROM routers WHERE customer_id = $customer_id ORDER BY identity_name"
+          "rawSql": "SELECT r.identity_name AS \"Router\", r.mgmt_host AS \"Mgmt Host\", rf.board_name AS \"Model\", rf.architecture AS \"Arch\", rf.routeros_version AS \"RouterOS\", rf.current_firmware AS \"Board Firmware\", rf.latest_routeros_version AS \"Latest RouterOS\", rf.update_status AS \"Update Status\", rm.uptime AS \"Uptime\", r.last_seen_at AS \"Last Seen\", CASE WHEN r.last_seen_at > now() - interval '15 minutes' THEN 'online' ELSE 'offline' END AS \"Status\" FROM routers r LEFT JOIN LATERAL (SELECT uptime FROM router_metrics WHERE router_id = r.id ORDER BY time DESC LIMIT 1) rm ON true LEFT JOIN LATERAL (SELECT board_name, architecture, routeros_version, current_firmware, latest_routeros_version, update_status FROM router_firmware WHERE router_id = r.id ORDER BY time DESC LIMIT 1) rf ON true WHERE r.customer_id = $customer_id ORDER BY r.identity_name"
         }
       ]
+    },
+    {
+      "id": 201,
+      "type": "row",
+      "title": "Network Quality",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      }
     },
     {
       "id": 2,
@@ -98,13 +221,16 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 7
+        "y": 20
       },
       "repeat": "router",
-      "repeatDirection": "h",
+      "repeatDirection": "v",
       "fieldConfig": {
         "defaults": {
-          "unit": "bps"
+          "unit": "bps",
+          "custom": {
+            "spanNulls": 900000
+          }
         },
         "overrides": []
       },
@@ -113,7 +239,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "WITH deltas AS (SELECT uplink_label, time, rx_bytes - LAG(rx_bytes) OVER (PARTITION BY uplink_label ORDER BY time) AS rx_delta, tx_bytes - LAG(tx_bytes) OVER (PARTITION BY uplink_label ORDER BY time) AS tx_delta, EXTRACT(EPOCH FROM (time - LAG(time) OVER (PARTITION BY uplink_label ORDER BY time))) AS seconds_elapsed FROM uplink_metrics WHERE router_id = $router AND $__timeFilter(time)) SELECT time_bucket('5 minutes', time) AS \"time\", uplink_label || ' download' AS metric, GREATEST(rx_delta, 0) * 8 / NULLIF(seconds_elapsed, 0) AS value FROM deltas WHERE rx_delta IS NOT NULL UNION ALL SELECT time_bucket('5 minutes', time), uplink_label || ' upload', GREATEST(tx_delta, 0) * 8 / NULLIF(seconds_elapsed, 0) FROM deltas WHERE tx_delta IS NOT NULL ORDER BY 1"
+          "rawSql": "WITH deltas AS (SELECT uplink_label, time, rx_bytes - LAG(rx_bytes) OVER (PARTITION BY uplink_label ORDER BY time) AS rx_delta, tx_bytes - LAG(tx_bytes) OVER (PARTITION BY uplink_label ORDER BY time) AS tx_delta, EXTRACT(EPOCH FROM (time - LAG(time) OVER (PARTITION BY uplink_label ORDER BY time))) AS seconds_elapsed FROM uplink_metrics WHERE router_id = $router AND $__timeFilter(time)) SELECT time_bucket_gapfill('5 minutes', time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz) AS \"time\", uplink_label || ' download' AS metric, CASE WHEN max(rx_delta) IS NULL THEN NULL ELSE GREATEST(max(rx_delta), 0) * 8 / NULLIF(max(seconds_elapsed), 0) END AS value FROM deltas GROUP BY 1, uplink_label UNION ALL SELECT time_bucket_gapfill('5 minutes', time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz), uplink_label || ' upload', CASE WHEN max(tx_delta) IS NULL THEN NULL ELSE GREATEST(max(tx_delta), 0) * 8 / NULLIF(max(seconds_elapsed), 0) END FROM deltas GROUP BY 1, uplink_label ORDER BY 1"
         }
       ]
     },
@@ -128,12 +254,15 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 15
+        "x": 12,
+        "y": 20
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bps"
+          "unit": "bps",
+          "custom": {
+            "spanNulls": 900000
+          }
         },
         "overrides": []
       },
@@ -142,14 +271,14 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "WITH deltas AS (SELECT um.router_id, um.uplink_label, um.time, um.rx_bytes - LAG(um.rx_bytes) OVER (PARTITION BY um.router_id, um.uplink_label ORDER BY um.time) AS rx_delta, um.tx_bytes - LAG(um.tx_bytes) OVER (PARTITION BY um.router_id, um.uplink_label ORDER BY um.time) AS tx_delta, EXTRACT(EPOCH FROM (um.time - LAG(um.time) OVER (PARTITION BY um.router_id, um.uplink_label ORDER BY um.time))) AS seconds_elapsed FROM uplink_metrics um JOIN routers r ON r.id = um.router_id WHERE r.customer_id = $customer_id AND $__timeFilter(um.time)) SELECT time_bucket('5 minutes', time) AS \"time\", sum(GREATEST(rx_delta, 0) * 8 / NULLIF(seconds_elapsed, 0)) AS \"download_bps\", sum(GREATEST(tx_delta, 0) * 8 / NULLIF(seconds_elapsed, 0)) AS \"upload_bps\" FROM deltas WHERE rx_delta IS NOT NULL GROUP BY 1 ORDER BY 1"
+          "rawSql": "WITH deltas AS (SELECT um.router_id, um.uplink_label, um.time, um.rx_bytes - LAG(um.rx_bytes) OVER (PARTITION BY um.router_id, um.uplink_label ORDER BY um.time) AS rx_delta, um.tx_bytes - LAG(um.tx_bytes) OVER (PARTITION BY um.router_id, um.uplink_label ORDER BY um.time) AS tx_delta, EXTRACT(EPOCH FROM (um.time - LAG(um.time) OVER (PARTITION BY um.router_id, um.uplink_label ORDER BY um.time))) AS seconds_elapsed FROM uplink_metrics um JOIN routers r ON r.id = um.router_id WHERE r.customer_id = $customer_id AND $__timeFilter(um.time)) SELECT time_bucket_gapfill('5 minutes', time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz) AS \"time\", sum(CASE WHEN rx_delta IS NULL THEN NULL ELSE GREATEST(rx_delta, 0) * 8 / NULLIF(seconds_elapsed, 0) END) AS \"download_bps\", sum(CASE WHEN tx_delta IS NULL THEN NULL ELSE GREATEST(tx_delta, 0) * 8 / NULLIF(seconds_elapsed, 0) END) AS \"upload_bps\" FROM deltas GROUP BY 1 ORDER BY 1"
         }
       ]
     },
     {
       "id": 3,
       "type": "table",
-      "title": "Ping Latency & Loss (latest)",
+      "title": "Ping Latency, Jitter & Loss (latest)",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
@@ -157,8 +286,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 15
+        "x": 0,
+        "y": 28
       },
       "fieldConfig": {
         "defaults": {},
@@ -169,7 +298,240 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT DISTINCT ON (pm.router_id, pm.target_name) r.identity_name AS \"Router\", pm.target_name || ' (' || pm.target_host || ')' AS \"Target\", pm.rtt_avg_ms AS \"Avg RTT (ms)\", pm.packet_loss_pct AS \"Loss %\", pm.time AS \"As of\" FROM path_metrics pm JOIN routers r ON r.id = pm.router_id WHERE r.customer_id = $customer_id AND pm.target_name IN ('cloudflare-dns', 'google-dns', 'facebook.com', 'google.com') ORDER BY pm.router_id, pm.target_name, pm.time DESC"
+          "rawSql": "SELECT DISTINCT ON (pm.router_id, pm.target_name) r.identity_name AS \"Router\", pm.target_name || ' (' || pm.target_host || ')' AS \"Target\", pm.rtt_avg_ms AS \"Avg RTT (ms)\", pm.jitter_ms AS \"Jitter (ms)\", pm.packet_loss_pct AS \"Loss %\", pm.time AS \"As of\" FROM path_metrics pm JOIN routers r ON r.id = pm.router_id WHERE r.customer_id = $customer_id AND pm.target_name IN ('cloudflare-dns', 'google-dns', 'facebook.com', 'google.com') ORDER BY pm.router_id, pm.target_name, pm.time DESC"
+        }
+      ]
+    },
+    {
+      "id": 105,
+      "type": "timeseries",
+      "title": "Path Latency & Jitter - $router",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "repeat": "router",
+      "repeatDirection": "v",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "spanNulls": 900000
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT time_bucket_gapfill('5 minutes', time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz) AS \"time\", target_name || ' latency' AS metric, avg(rtt_avg_ms) AS value FROM path_metrics WHERE router_id = $router AND $__timeFilter(time) GROUP BY 1, target_name UNION ALL SELECT time_bucket_gapfill('5 minutes', time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz), target_name || ' jitter', avg(jitter_ms) FROM path_metrics WHERE router_id = $router AND $__timeFilter(time) GROUP BY 1, target_name ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 103,
+      "type": "table",
+      "title": "Interface Health (latest, problems only)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Link"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "up": {
+                        "color": "green",
+                        "index": 0
+                      },
+                      "down": {
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Router"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "basic"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT \"Router\", \"Interface\", \"Link\", \"FCS Errors\", \"RX Too Short\", \"RX Too Long\", \"RX Overflow\", \"Collisions\", \"Late Collisions\", \"TX Underrun\", \"As of\" FROM (SELECT DISTINCT ON (im.router_id, im.interface_name) r.identity_name AS \"Router\", im.interface_name AS \"Interface\", CASE WHEN im.running THEN 'up' ELSE 'down' END AS \"Link\", im.rx_fcs_error AS \"FCS Errors\", im.rx_too_short AS \"RX Too Short\", im.rx_too_long AS \"RX Too Long\", im.rx_overflow AS \"RX Overflow\", im.tx_collision AS \"Collisions\", im.tx_late_collision AS \"Late Collisions\", im.tx_underrun AS \"TX Underrun\", im.time AS \"As of\" FROM interface_metrics im JOIN routers r ON r.id = im.router_id WHERE r.customer_id = $customer_id ORDER BY im.router_id, im.interface_name, im.time DESC) sub WHERE \"FCS Errors\" > 0 OR \"RX Too Short\" > 0 OR \"RX Too Long\" > 0 OR \"RX Overflow\" > 0 OR \"Collisions\" > 0 OR \"Late Collisions\" > 0 OR \"TX Underrun\" > 0 ORDER BY \"Router\", \"Interface\""
+        }
+      ]
+    },
+    {
+      "id": 104,
+      "type": "timeseries",
+      "title": "Interface Errors - $router",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      },
+      "repeat": "router",
+      "repeatDirection": "v",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "spanNulls": 900000
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "WITH deltas AS (SELECT interface_name, time, rx_fcs_error - LAG(rx_fcs_error) OVER (PARTITION BY interface_name ORDER BY time) AS fcs_delta, tx_collision - LAG(tx_collision) OVER (PARTITION BY interface_name ORDER BY time) AS collision_delta FROM interface_metrics WHERE router_id = $router AND $__timeFilter(time)) SELECT time_bucket_gapfill('5 minutes', time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz) AS \"time\", interface_name || ' FCS errors' AS metric, CASE WHEN max(fcs_delta) IS NULL THEN NULL ELSE GREATEST(max(fcs_delta), 0) END AS value FROM deltas GROUP BY 1, interface_name UNION ALL SELECT time_bucket_gapfill('5 minutes', time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz), interface_name || ' collisions', CASE WHEN max(collision_delta) IS NULL THEN NULL ELSE GREATEST(max(collision_delta), 0) END FROM deltas GROUP BY 1, interface_name ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 202,
+      "type": "row",
+      "title": "Router Resource Health",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Resource Usage (CPU / RAM / Disk)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 51
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "spanNulls": 900000
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT time_bucket_gapfill('5 minutes', rm.time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz) AS \"time\", r.identity_name || ' CPU %' AS metric, avg(rm.cpu_load_pct) AS value FROM router_metrics rm JOIN routers r ON r.id = rm.router_id WHERE r.customer_id = $customer_id AND $__timeFilter(rm.time) GROUP BY 1, r.identity_name UNION ALL SELECT time_bucket_gapfill('5 minutes', rm.time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz), r.identity_name || ' RAM %', avg(CASE WHEN rm.ram_total_bytes > 0 THEN 100.0 * rm.ram_used_bytes / rm.ram_total_bytes END) FROM router_metrics rm JOIN routers r ON r.id = rm.router_id WHERE r.customer_id = $customer_id AND $__timeFilter(rm.time) GROUP BY 1, r.identity_name UNION ALL SELECT time_bucket_gapfill('5 minutes', rm.time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz), r.identity_name || ' Disk %', avg(CASE WHEN rm.disk_total_bytes > 0 THEN 100.0 * rm.disk_used_bytes / rm.disk_total_bytes END) FROM router_metrics rm JOIN routers r ON r.id = rm.router_id WHERE r.customer_id = $customer_id AND $__timeFilter(rm.time) GROUP BY 1, r.identity_name ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "CPU Cores - $router",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "repeat": "router",
+      "repeatDirection": "v",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "spanNulls": 900000
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT time_bucket_gapfill('5 minutes', time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz) AS \"time\", core_name AS metric, avg(load_pct) AS value FROM cpu_core_metrics WHERE router_id = $router AND $__timeFilter(time) GROUP BY 1, core_name ORDER BY 1"
         }
       ]
     },
@@ -183,9 +545,9 @@
       },
       "gridPos": {
         "h": 6,
-        "w": 12,
+        "w": 24,
         "x": 0,
-        "y": 23
+        "y": 59
       },
       "fieldConfig": {
         "defaults": {},
@@ -196,48 +558,20 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT DISTINCT ON (dm.router_id, dm.pool_name) r.identity_name AS \"Router\", dm.pool_name AS \"Pool\", dm.active_leases AS \"Active\", dm.total_addresses AS \"Total\", dm.utilization_pct AS \"Util %\", dm.time AS \"As of\" FROM dhcp_pool_metrics dm JOIN routers r ON r.id = dm.router_id WHERE r.customer_id = $customer_id ORDER BY dm.router_id, dm.pool_name, dm.time DESC"
-        }
-      ]
-    },
-    {
-      "id": 5,
-      "type": "table",
-      "title": "Firmware (latest)",
-      "datasource": {
-        "type": "postgres",
-        "uid": "timescaledb"
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 12,
-        "x": 12,
-        "y": 23
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "options": {},
-      "targets": [
-        {
-          "refId": "A",
-          "format": "table",
-          "rawSql": "SELECT DISTINCT ON (rf.router_id) r.identity_name AS \"Router\", rf.board_name AS \"Model\", rf.architecture AS \"Arch\", rf.routeros_version AS \"RouterOS\", rf.current_firmware AS \"Firmware\", rf.upgrade_firmware AS \"Available Upgrade\", rf.time AS \"Checked\" FROM router_firmware rf JOIN routers r ON r.id = rf.router_id WHERE r.customer_id = $customer_id ORDER BY rf.router_id, rf.time DESC"
+          "rawSql": "SELECT * FROM (SELECT DISTINCT ON (dm.router_id, dm.pool_name) r.identity_name AS \"Router\", dm.pool_name AS \"Pool\", dm.active_leases AS \"Active\", dm.total_addresses AS \"Total\", dm.utilization_pct AS \"Util %\", dm.time AS \"As of\" FROM dhcp_pool_metrics dm JOIN routers r ON r.id = dm.router_id WHERE r.customer_id = $customer_id ORDER BY dm.router_id, dm.pool_name, dm.time DESC) latest ORDER BY \"Util %\" DESC"
         }
       ]
     },
     {
       "id": 101,
       "type": "row",
-      "title": "UniFi / Wireless",
+      "title": "Wireless / UniFi",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 59
-      },
-      "panels": []
+        "y": 95
+      }
     },
     {
       "id": 6,
@@ -251,11 +585,13 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 60
+        "y": 96
       },
       "fieldConfig": {
         "defaults": {
-          "custom": {}
+          "custom": {
+            "spanNulls": 900000
+          }
         },
         "overrides": []
       },
@@ -271,7 +607,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT time_bucket('5 minutes', cm.time) AS \"time\", count(DISTINCT cm.client_mac) AS \"clients\" FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND $__timeFilter(cm.time) GROUP BY 1 ORDER BY 1"
+          "rawSql": "SELECT time_bucket_gapfill('5 minutes', cm.time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz) AS \"time\", count(DISTINCT cm.client_mac) AS \"clients\" FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND $__timeFilter(cm.time) GROUP BY 1 ORDER BY 1"
         }
       ]
     },
@@ -287,11 +623,13 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 60
+        "y": 96
       },
       "fieldConfig": {
         "defaults": {
-          "custom": {}
+          "custom": {
+            "spanNulls": 900000
+          }
         },
         "overrides": []
       },
@@ -307,7 +645,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT time_bucket('5 minutes', cm.time) AS \"time\", avg(cm.signal) AS \"avg_signal\", avg(cm.satisfaction) AS \"avg_satisfaction\" FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND $__timeFilter(cm.time) GROUP BY 1 ORDER BY 1"
+          "rawSql": "SELECT time_bucket_gapfill('5 minutes', cm.time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz) AS \"time\", avg(cm.signal) AS \"avg_signal\", avg(cm.satisfaction) AS \"avg_satisfaction\" FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND $__timeFilter(cm.time) GROUP BY 1 ORDER BY 1"
         }
       ]
     },
@@ -323,7 +661,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 68
+        "y": 104
       },
       "fieldConfig": {
         "defaults": {},
@@ -339,68 +677,58 @@
       ]
     },
     {
-      "id": 9,
-      "type": "timeseries",
-      "title": "Resource Usage (CPU / RAM / Disk)",
+      "id": 203,
+      "type": "row",
+      "title": "Logs & Diagnostics",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 79
+      }
+    },
+    {
+      "id": 102,
+      "type": "logs",
+      "title": "Router Logs - $router",
       "datasource": {
-        "type": "postgres",
-        "uid": "timescaledb"
+        "type": "loki",
+        "uid": "loki"
       },
       "gridPos": {
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 80
       },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "min": 0,
-          "max": 100
-        },
-        "overrides": []
+      "repeat": "router",
+      "repeatDirection": "v",
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none",
+        "enableLogDetails": true
       },
-      "options": {},
       "targets": [
         {
           "refId": "A",
-          "format": "time_series",
-          "rawSql": "SELECT rm.time AS \"time\", r.identity_name || ' CPU %' AS metric, rm.cpu_load_pct AS value FROM router_metrics rm JOIN routers r ON r.id = rm.router_id WHERE r.customer_id = $customer_id AND $__timeFilter(rm.time) UNION ALL SELECT rm.time, r.identity_name || ' RAM %', CASE WHEN rm.ram_total_bytes > 0 THEN 100.0 * rm.ram_used_bytes / rm.ram_total_bytes END FROM router_metrics rm JOIN routers r ON r.id = rm.router_id WHERE r.customer_id = $customer_id AND $__timeFilter(rm.time) UNION ALL SELECT rm.time, r.identity_name || ' Disk %', CASE WHEN rm.disk_total_bytes > 0 THEN 100.0 * rm.disk_used_bytes / rm.disk_total_bytes END FROM router_metrics rm JOIN routers r ON r.id = rm.router_id WHERE r.customer_id = $customer_id AND $__timeFilter(rm.time) ORDER BY 1"
+          "expr": "{job=\"mikrotik_syslog\", host=\"${router:text}\", level=~\"critical|error|warning\"}"
         }
       ]
     },
     {
-      "id": 11,
-      "type": "timeseries",
-      "title": "CPU Cores - $router",
-      "datasource": {
-        "type": "postgres",
-        "uid": "timescaledb"
-      },
+      "id": 204,
+      "type": "row",
+      "title": "Inventory / Config",
       "gridPos": {
-        "h": 8,
+        "h": 1,
         "w": 24,
         "x": 0,
-        "y": 37
-      },
-      "repeat": "router",
-      "repeatDirection": "v",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "min": 0,
-          "max": 100
-        },
-        "overrides": []
-      },
-      "options": {},
-      "targets": [
-        {
-          "refId": "A",
-          "format": "time_series",
-          "rawSql": "SELECT time_bucket('5 minutes', time) AS \"time\", core_name AS metric, avg(load_pct) AS value FROM cpu_core_metrics WHERE router_id = $router AND $__timeFilter(time) GROUP BY 1, core_name ORDER BY 1"
-        }
-      ]
+        "y": 88
+      }
     },
     {
       "id": 12,
@@ -414,7 +742,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 89
       },
       "fieldConfig": {
         "defaults": {},
@@ -449,34 +777,314 @@
       ]
     },
     {
-      "id": 102,
-      "type": "logs",
-      "title": "Router Logs - $router",
+      "id": 111,
+      "type": "stat",
+      "title": "Conntrack Usage % (worst router)",
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT round(100.0 * conntrack_count / NULLIF(conntrack_max,0), 1) AS \"value\" FROM (SELECT DISTINCT ON (rm.router_id) rm.conntrack_count, rm.conntrack_max FROM router_metrics rm JOIN routers r ON r.id = rm.router_id WHERE r.customer_id = $customer_id ORDER BY rm.router_id, rm.time DESC) latest ORDER BY value DESC NULLS LAST LIMIT 1"
+        }
+      ]
+    },
+    {
+      "id": 112,
+      "type": "stat",
+      "title": "Worst Router Conntrack (used / max)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "n/a"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT conntrack_count || ' / ' || conntrack_max AS \"value\" FROM (SELECT DISTINCT ON (rm.router_id) rm.conntrack_count, rm.conntrack_max, round(100.0 * rm.conntrack_count / NULLIF(rm.conntrack_max,0), 1) AS pct FROM router_metrics rm JOIN routers r ON r.id = rm.router_id WHERE r.customer_id = $customer_id ORDER BY rm.router_id, rm.time DESC) latest ORDER BY pct DESC NULLS LAST LIMIT 1"
+        }
+      ]
+    },
+    {
+      "id": 108,
+      "type": "stat",
+      "title": "Avg Packet Loss %",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 2
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT avg(loss) AS \"value\" FROM (SELECT DISTINCT ON (pm.router_id, pm.target_name) pm.packet_loss_pct AS loss FROM path_metrics pm JOIN routers r ON r.id = pm.router_id WHERE r.customer_id = $customer_id ORDER BY pm.router_id, pm.target_name, pm.time DESC) latest"
+        }
+      ]
+    },
+    {
+      "id": 110,
+      "type": "stat",
+      "title": "Avg Latency (ms)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 150
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT avg(rtt) AS \"value\" FROM (SELECT DISTINCT ON (pm.router_id, pm.target_name) pm.rtt_avg_ms AS rtt FROM path_metrics pm JOIN routers r ON r.id = pm.router_id WHERE r.customer_id = $customer_id ORDER BY pm.router_id, pm.target_name, pm.time DESC) latest"
+        }
+      ]
+    },
+    {
+      "id": 113,
+      "type": "table",
+      "title": "System Health (latest)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 65
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "ok": {
+                        "color": "green",
+                        "index": 0
+                      },
+                      "fail": {
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT * FROM (SELECT DISTINCT ON (hm.router_id, hm.gauge_name) r.identity_name AS \"Router\", hm.gauge_name AS \"Gauge\", hm.value AS \"Value\", hm.unit AS \"Unit\", hm.time AS \"As of\" FROM health_metrics hm JOIN routers r ON r.id = hm.router_id WHERE r.customer_id = $customer_id ORDER BY hm.router_id, hm.gauge_name, hm.time DESC) latest ORDER BY \"Router\", \"Gauge\""
+        }
+      ]
+    },
+    {
+      "id": 114,
+      "type": "timeseries",
+      "title": "Temperature & Fan Speed - $router",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
       },
       "gridPos": {
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 51
+        "y": 71
       },
       "repeat": "router",
       "repeatDirection": "v",
-      "options": {
-        "showTime": true,
-        "showLabels": false,
-        "showCommonLabels": false,
-        "wrapLogMessage": true,
-        "sortOrder": "Descending",
-        "dedupStrategy": "none",
-        "enableLogDetails": true
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "spanNulls": 900000
+          }
+        },
+        "overrides": []
       },
+      "options": {},
       "targets": [
         {
           "refId": "A",
-          "expr": "{job=\"mikrotik_syslog\", host=\"${router:text}\"}"
+          "format": "time_series",
+          "rawSql": "SELECT time_bucket_gapfill('5 minutes', time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz) AS \"time\", gauge_name AS metric, avg(CASE WHEN value ~ '^[0-9.]+$' THEN value::numeric END) AS value FROM health_metrics WHERE router_id = $router AND $__timeFilter(time) AND (gauge_name LIKE '%temperature%' OR gauge_name LIKE '%speed%') GROUP BY 1, gauge_name ORDER BY 1"
         }
       ]
     }

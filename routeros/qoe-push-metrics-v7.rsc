@@ -42,6 +42,29 @@
 :local freeHdd [/system resource get free-hdd-space]
 :local usedHdd ($totalHdd - $freeHdd)
 
+# --- Connection tracking table utilization -- a busy CGNAT/customer-heavy
+# router can silently start dropping new connections once this fills,
+# which looks like random "sites won't load" complaints, not an obvious
+# outage. Same field names (max-entries/total-entries) confirmed present
+# on both RouterOS 6 and 7.
+:local conntrackMax [/ip firewall connection tracking get max-entries]
+:local conntrackCount [/ip firewall connection tracking get total-entries]
+
+# --- System health (temperature, fan, PSU) -- v7's `/system health print`
+# returns a variable-length list of named "gauges" (differs by hardware:
+# per-component temps, fan speeds/state, PSU state), unlike v6's fixed
+# singleton properties (see qoe-push-metrics-v6.rsc). No `gauges` subcommand
+# exists -- confirmed live, "no such command prefix" -- plain
+# `/system health print` already is the gauge-list format on v7.
+:local healthJson ""
+:foreach hId in=[/system health find] do={
+    :local gName [/system health get $hId name]
+    :local gValue [/system health get $hId value]
+    :local gUnit [/system health get $hId type]
+    :if ($healthJson != "") do={ :set healthJson ($healthJson . ",") }
+    :set healthJson ($healthJson . "{\"name\":\"$gName\",\"value\":\"$gValue\",\"unit\":\"$gUnit\"}")
+}
+
 # --- Per-core CPU load -- the system-wide cpuLoad average above can look
 # fine even when one core is individually maxed out (seen in practice).
 :local coresJson ""
@@ -80,6 +103,17 @@
     :local rttSum 0
     :local rttMin -1
     :local rttMax -1
+    # Jitter here is the mean absolute difference between consecutive RTT
+    # samples *within this one burst* (all 5 pings already hit the same
+    # resolved IP -- $tHost was resolved once above, not re-resolved per
+    # packet), so this is immune to a domain target's DNS resolving to a
+    # different edge server between separate 5-minute polls. That's a
+    # real, different phenomenon (worth seeing on the latency trend
+    # graph) but isn't what "jitter" means, and would corrupt a jitter
+    # figure computed across polls instead of within one.
+    :local jitterSum 0
+    :local jitterCount 0
+    :local prevRtt -1
 
     :local results
     :do {
@@ -93,19 +127,29 @@
             :set rttSum ($rttSum + $rttMs)
             :if ($rttMin = -1 or $rttMs < $rttMin) do={ :set rttMin $rttMs }
             :if ($rttMax = -1 or $rttMs > $rttMax) do={ :set rttMax $rttMs }
+            :if ($prevRtt != -1) do={
+                :local diff ($rttMs - $prevRtt)
+                :if ($diff < 0) do={ :set diff (0 - $diff) }
+                :set jitterSum ($jitterSum + $diff)
+                :set jitterCount ($jitterCount + 1)
+            }
+            :set prevRtt $rttMs
         }
     }
 
     :local lossPct 100
     :local rttAvg 0
+    :local jitterAvg 0
     :if ($sent > 0) do={ :set lossPct (100 * ($sent - $received) / $sent) }
     :if ($received > 0) do={ :set rttAvg ($rttSum / $received) }
+    :if ($jitterCount > 0) do={ :set jitterAvg ($jitterSum / $jitterCount) }
     :if ($rttMin = -1) do={ :set rttMin 0 }
     :if ($rttMax = -1) do={ :set rttMax 0 }
 
     :if ($pingsJson != "") do={ :set pingsJson ($pingsJson . ",") }
     :set pingsJson ($pingsJson . "{\"target_name\":\"$tName\",\"target_host\":\"$tHost\"," . \
-        "\"rtt_min_ms\":$rttMin,\"rtt_avg_ms\":$rttAvg,\"rtt_max_ms\":$rttMax,\"packet_loss_pct\":$lossPct}")
+        "\"rtt_min_ms\":$rttMin,\"rtt_avg_ms\":$rttAvg,\"rtt_max_ms\":$rttMax,\"packet_loss_pct\":$lossPct," . \
+        "\"jitter_ms\":$jitterAvg}")
 }
 
 # --- DHCP pool utilization ---
@@ -150,12 +194,51 @@
     :set dhcpJson ($dhcpJson . "{\"pool_name\":\"$pName\",\"total_addresses\":$totalAddresses,\"active_leases\":$activeLeases}")
 }
 
+# --- Physical interface health (ether + SFP/SFP+ ports) ---
+# /interface/ethernet is its own subsystem -- it structurally can't return
+# vlan/bridge/pppoe-in/pppoe-out interfaces (those live under separate
+# subsystems), so no extra type filter is needed here. Sticks to fields
+# confirmed present on both RouterOS 6 and 7 (v7 adds rx-error-events and
+# tx-drop-packet, v6 doesn't have them at all) so one script works on
+# both, matching every other block in this file.
+:local ifacesJson ""
+:foreach ifaceId in=[/interface ethernet find] do={
+    :local ifName [/interface ethernet get $ifaceId name]
+    :local ifRunning [/interface ethernet get $ifaceId running]
+    :local ifDisabled [/interface ethernet get $ifaceId disabled]
+    :local fcsErr [/interface ethernet get $ifaceId rx-fcs-error]
+    :local rxTooShort [/interface ethernet get $ifaceId rx-too-short]
+    :local rxTooLong [/interface ethernet get $ifaceId rx-too-long]
+    :local rxOverflow [/interface ethernet get $ifaceId rx-overflow]
+    :local txCollision [/interface ethernet get $ifaceId tx-collision]
+    :local txLateCollision [/interface ethernet get $ifaceId tx-late-collision]
+    :local txUnderrun [/interface ethernet get $ifaceId tx-underrun]
+
+    # Link-down ports (running=false) return nil, not 0, for some of
+    # these counters -- confirmed in practice, not every port, not every
+    # field consistently. An interpolated nil produces an empty token
+    # ("rx_overflow":,), which is invalid JSON and fails the whole push.
+    :if ([:typeof $fcsErr] = "nil") do={ :set fcsErr 0 }
+    :if ([:typeof $rxTooShort] = "nil") do={ :set rxTooShort 0 }
+    :if ([:typeof $rxTooLong] = "nil") do={ :set rxTooLong 0 }
+    :if ([:typeof $rxOverflow] = "nil") do={ :set rxOverflow 0 }
+    :if ([:typeof $txCollision] = "nil") do={ :set txCollision 0 }
+    :if ([:typeof $txLateCollision] = "nil") do={ :set txLateCollision 0 }
+    :if ([:typeof $txUnderrun] = "nil") do={ :set txUnderrun 0 }
+
+    :if ($ifacesJson != "") do={ :set ifacesJson ($ifacesJson . ",") }
+    :set ifacesJson ($ifacesJson . "{\"interface\":\"$ifName\",\"running\":$ifRunning,\"disabled\":$ifDisabled," . \
+        "\"rx_fcs_error\":$fcsErr,\"rx_too_short\":$rxTooShort,\"rx_too_long\":$rxTooLong,\"rx_overflow\":$rxOverflow," . \
+        "\"tx_collision\":$txCollision,\"tx_late_collision\":$txLateCollision,\"tx_underrun\":$txUnderrun}")
+}
+
 :local payload ("{\"router_id\":\"$routerId\",\"rx_bytes\":$rx,\"tx_bytes\":$tx," . \
     "\"uptime\":\"$uptimeVal\",\"cpu_load_pct\":$cpuLoad," . \
     "\"ram_used_bytes\":$usedMem,\"ram_total_bytes\":$totalMem," . \
     "\"disk_used_bytes\":$usedHdd,\"disk_total_bytes\":$totalHdd," . \
+    "\"conntrack_count\":$conntrackCount,\"conntrack_max\":$conntrackMax," . \
     "\"pings\":[$pingsJson],\"dhcp_pools\":[$dhcpJson],\"uplinks\":[$uplinksJson]," . \
-    "\"cpu_cores\":[$coresJson]}")
+    "\"cpu_cores\":[$coresJson],\"interfaces\":[$ifacesJson],\"health\":[$healthJson]}")
 
 /tool fetch url=$url http-method=post \
     http-header-field="Content-Type: application/json,Authorization: Bearer $token" \
