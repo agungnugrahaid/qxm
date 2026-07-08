@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 51,
+  "version": 57,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -570,7 +570,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 87
+        "y": 95
       }
     },
     {
@@ -585,7 +585,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 88
+        "y": 96
       },
       "fieldConfig": {
         "defaults": {
@@ -623,7 +623,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 88
+        "y": 96
       },
       "fieldConfig": {
         "defaults": {
@@ -661,7 +661,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 96
+        "y": 104
       },
       "fieldConfig": {
         "defaults": {},
@@ -695,6 +695,36 @@
                 "value": "color-background"
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Controller URL"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "AP"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open in UniFi controller",
+                    "url": "${__data.fields[\"Controller URL\"]}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
           }
         ]
       },
@@ -703,7 +733,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT * FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name AS \"AP\", CASE WHEN ai.state = 1 THEN 'online' ELSE 'offline' END AS \"Status\", ai.satisfaction AS \"Satisfaction\", ai.num_sta AS \"Clients\", ai.model AS \"Model\", ai.version AS \"Firmware\", ai.cpu_pct AS \"CPU %\", ai.mem_pct AS \"Mem %\", ai.channel_util_2g AS \"2.4G Util\", ai.channel_util_5g AS \"5G Util\", ai.time AS \"As of\" FROM ap_inventory ai WHERE ai.site_id IN (SELECT id FROM sites WHERE customer_id = $customer_id) ORDER BY ai.ap_mac, ai.time DESC) latest ORDER BY \"Status\", \"AP\""
+          "rawSql": "SELECT * FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name AS \"AP\", CASE WHEN ai.state = 1 THEN 'online' ELSE 'offline' END AS \"Status\", ai.satisfaction AS \"Satisfaction\", ai.num_sta AS \"Clients\", ai.model AS \"Model\", ai.version AS \"Firmware\", ai.cpu_pct AS \"CPU %\", ai.mem_pct AS \"Mem %\", ai.channel_util_2g AS \"2.4G Util\", ai.channel_util_5g AS \"5G Util\", c.base_url || '/manage/site/' || s.unifi_site_name || '/dashboard' AS \"Controller URL\", ai.time AS \"As of\" FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id JOIN controllers c ON c.id = s.controller_id WHERE s.customer_id = $customer_id ORDER BY ai.ap_mac, ai.time DESC) latest ORDER BY \"Status\", \"AP\""
         }
       ]
     },
@@ -738,10 +768,14 @@
         "showTime": true,
         "showLabels": false,
         "showCommonLabels": false,
-        "wrapLogMessage": true,
+        "wrapLogMessage": false,
         "sortOrder": "Descending",
         "dedupStrategy": "none",
-        "enableLogDetails": true
+        "enableLogDetails": true,
+        "fontSize": "small",
+        "detailsMode": "sidebar",
+        "showControls": true,
+        "allowDownload": true
       },
       "targets": [
         {
@@ -758,7 +792,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 80
+        "y": 88
       }
     },
     {
@@ -773,7 +807,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 81
+        "y": 89
       },
       "fieldConfig": {
         "defaults": {},
@@ -1088,7 +1122,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 104
+        "y": 112
       },
       "fieldConfig": {
         "defaults": {},
@@ -1272,6 +1306,36 @@
                 "value": 190
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Controller URL"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "AP"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open in UniFi controller",
+                    "url": "${__data.fields[\"Controller URL\"]}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
           }
         ]
       },
@@ -1280,7 +1344,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "WITH latest AS (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.site_id, cm.ap_mac, ai.ap_name AS ap_name, cm.client_mac, cm.hostname, cm.essid, cm.signal, cm.noise, (cm.signal - cm.noise) AS snr, cm.satisfaction, 100.0 * cm.tx_retries / NULLIF(cm.wifi_tx_attempts, 0) AS retry_pct, cm.tx_rate / 1000 AS tx_rate_mbps, cm.channel, cm.time FROM client_metrics cm JOIN sites s ON s.id = cm.site_id LEFT JOIN LATERAL (SELECT ap_name FROM ap_inventory WHERE ap_mac = cm.ap_mac ORDER BY time DESC LIMIT 1) ai ON true WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC), problems AS (SELECT *, count(*) OVER (PARTITION BY ap_mac, channel) AS peers_on_same_channel FROM latest WHERE retry_pct > 20 OR satisfaction < 80 OR signal < -75) SELECT ap_name AS \"AP\", client_mac AS \"Client\", hostname AS \"Device\", essid AS \"SSID\", CASE WHEN peers_on_same_channel >= 3 THEN 'Channel congestion (' || peers_on_same_channel || ' affected)' WHEN snr < 15 THEN 'Weak signal / interference' WHEN snr >= 15 AND tx_rate_mbps IS NOT NULL AND tx_rate_mbps < 24 THEN 'Legacy device / rate issue' WHEN retry_pct > 20 THEN 'Elevated retries -- check UniFi UI' ELSE 'Unclear -- check UniFi UI' END AS \"Likely Cause\", signal AS \"Signal (dBm)\", noise AS \"Noise (dBm)\", snr AS \"SNR (dB)\", satisfaction AS \"Satisfaction\", round(retry_pct,1) AS \"Retry %\", tx_rate_mbps AS \"TX Rate (Mbps)\", channel AS \"Channel\", time AS \"As of\" FROM problems ORDER BY retry_pct DESC NULLS LAST"
+          "rawSql": "WITH latest AS (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.site_id, cm.ap_mac, ai.ap_name AS ap_name, cm.client_mac, cm.hostname, cm.essid, cm.signal, cm.noise, (cm.signal - cm.noise) AS snr, cm.satisfaction, 100.0 * cm.tx_retries / NULLIF(cm.wifi_tx_attempts, 0) AS retry_pct, cm.tx_rate / 1000 AS tx_rate_mbps, cm.channel, cm.time, ctrl.base_url || '/manage/site/' || s.unifi_site_name || '/dashboard' AS controller_url FROM client_metrics cm JOIN sites s ON s.id = cm.site_id JOIN controllers ctrl ON ctrl.id = s.controller_id LEFT JOIN LATERAL (SELECT ap_name FROM ap_inventory WHERE ap_mac = cm.ap_mac ORDER BY time DESC LIMIT 1) ai ON true WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC), problems AS (SELECT *, count(*) OVER (PARTITION BY ap_mac, channel) AS peers_on_same_channel FROM latest WHERE retry_pct > 20 OR satisfaction < 80 OR signal < -75) SELECT ap_name AS \"AP\", client_mac AS \"Client\", hostname AS \"Device\", essid AS \"SSID\", CASE WHEN peers_on_same_channel >= 3 THEN 'Channel congestion (' || peers_on_same_channel || ' affected)' WHEN snr < 15 THEN 'Weak signal / interference' WHEN snr >= 15 AND tx_rate_mbps IS NOT NULL AND tx_rate_mbps < 24 THEN 'Legacy device / rate issue' WHEN retry_pct > 20 THEN 'Elevated retries -- check UniFi UI' ELSE 'Unclear -- check UniFi UI' END AS \"Likely Cause\", signal AS \"Signal (dBm)\", noise AS \"Noise (dBm)\", snr AS \"SNR (dB)\", satisfaction AS \"Satisfaction\", round(retry_pct,1) AS \"Retry %\", tx_rate_mbps AS \"TX Rate (Mbps)\", channel AS \"Channel\", controller_url AS \"Controller URL\", time AS \"As of\" FROM problems ORDER BY retry_pct DESC NULLS LAST"
         }
       ]
     },
@@ -1699,6 +1763,42 @@
           "rawSql": "SELECT max(utilization_pct) AS \"value\" FROM (SELECT DISTINCT ON (dm.router_id, dm.pool_name) dm.utilization_pct FROM dhcp_pool_metrics dm JOIN routers r ON r.id = dm.router_id WHERE r.customer_id = $customer_id ORDER BY dm.router_id, dm.pool_name, dm.time DESC) latest"
         }
       ]
+    },
+    {
+      "id": 125,
+      "type": "logs",
+      "title": "Config Changes - $router",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 80
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": false,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "fontSize": "small",
+        "detailsMode": "sidebar",
+        "showControls": true,
+        "allowDownload": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{job=\"mikrotik_syslog\", host=\"${router:text}\"} |~ \"(added|removed|changed|scheduled|disabled|enabled|reset|moved) by\""
+        }
+      ],
+      "repeat": "router",
+      "repeatDirection": "v"
     }
   ]
 }

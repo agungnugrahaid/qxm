@@ -53,10 +53,45 @@
         <input type="checkbox" name="use_ssl" value="true" style="width:auto" {% if router and router.use_ssl %}checked{% endif %}>
         Use api-ssl (TLS, usually port 8729) instead of plaintext api
       </label>
-      <small>Requires a certificate already assigned to the router's api-ssl service -- see routeros/README.md.</small>
+      <small>Requires a certificate already assigned to the router's api-ssl service -- run the script below on the router's terminal first (see routeros/README.md for background).</small>
+
+      <div style="margin-top: 0.5rem;">
+        <pre id="api-ssl-script" class="diff" style="white-space: pre-wrap;">/certificate add name=api-ssl-cert common-name=REPLACE_ME key-usage=tls-server,key-cert-sign,crl-sign
+/certificate sign api-ssl-cert
+/ip service set api-ssl certificate=api-ssl-cert</pre>
+        <button type="button" class="btn" onclick="copyApiSslScript()">Copy script</button>
+        <small style="display:block; margin-top:0.35rem;">
+          Paste into the router's terminal (Winbox/SSH), then check "Use api-ssl" above and set the management port to 8729.
+          Once confirmed working, also disable the plaintext api service on the router (<code>/ip service disable api</code>) --
+          it's a real brute-force target if reachable from the internet.
+        </small>
+      </div>
     </div>
 
     <button class="btn primary" type="submit">Save</button>
     <a class="btn" href="/">Cancel</a>
   </form>
+
+  <script>
+    (function () {
+      var identityInput = document.querySelector('input[name="identity_name"]');
+      var scriptBlock = document.getElementById('api-ssl-script');
+
+      function render() {
+        var name = identityInput.value.trim() || 'REPLACE_ME';
+        scriptBlock.textContent =
+          '/certificate add name=api-ssl-cert common-name=' + name + ' key-usage=tls-server,key-cert-sign,crl-sign\n' +
+          '/certificate sign api-ssl-cert\n' +
+          '/ip service set api-ssl certificate=api-ssl-cert';
+      }
+
+      identityInput.addEventListener('input', render);
+      render();
+    })();
+
+    function copyApiSslScript() {
+      var text = document.getElementById('api-ssl-script').textContent;
+      navigator.clipboard.writeText(text);
+    }
+  </script>
 {% endblock %}
