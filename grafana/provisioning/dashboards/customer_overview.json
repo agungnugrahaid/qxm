@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 60,
+  "version": 61,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -1506,7 +1506,14 @@
                 "value": 5
               }
             ]
-          }
+          },
+          "links": [
+            {
+              "title": "View offline AP detail",
+              "url": "/d/customer-overview/customer-overview?viewPanel=128",
+              "targetBlank": false
+            }
+          ]
         },
         "overrides": []
       },
@@ -1901,6 +1908,65 @@
           "refId": "A",
           "expr": "count_over_time({job=\"mikrotik_syslog\", host=\"${router:text}\"} |~ `login failure for user \\S+ from \\S+ via \\S+` [1h])",
           "queryType": "instant"
+        }
+      ]
+    },
+    {
+      "id": 128,
+      "type": "table",
+      "title": "Offline APs (detail)",
+      "description": "APs whose controller reports them as anything other than connected, within the last 15 minutes -- the same population the APs Offline card counts. Click an AP name to open its site in the UniFi controller.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 131
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Controller URL"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "AP"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open in UniFi controller",
+                    "url": "${__data.fields[\"Controller URL\"]}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT ap_name AS \"AP\", site_label AS \"Site\", model AS \"Model\", version AS \"Firmware\", num_sta AS \"Last Client Count\", time AS \"Last Report\", controller_url AS \"Controller URL\" FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name, COALESCE(s.site_desc, s.unifi_site_name) AS site_label, ai.model, ai.version, ai.num_sta, ai.state, ai.time, c.base_url || '/manage/site/' || s.unifi_site_name || '/devices' AS controller_url FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id JOIN controllers c ON c.id = s.controller_id WHERE s.customer_id = $customer_id AND ai.time > now() - interval '15 minutes' ORDER BY ai.ap_mac, ai.time DESC) latest WHERE state != 1 OR state IS NULL ORDER BY site_label, ap_name"
         }
       ]
     }
