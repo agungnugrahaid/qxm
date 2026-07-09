@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 63,
+  "version": 64,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -1987,7 +1987,7 @@
       "id": 129,
       "type": "stat",
       "title": "Wi-Fi Clients Connected",
-      "description": "Wireless clients seen in the last 15 minutes, across all this customer's sites/controllers. Neither good nor bad by itself -- context for reading the other wireless cards.",
+      "description": "Wireless clients seen in the last 15 minutes, across all this customer's sites/controllers. Neither good nor bad by itself -- context for reading the other wireless cards. Click to see the full device list (searchable by name, AP, band).",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
@@ -2009,7 +2009,14 @@
                 "value": null
               }
             ]
-          }
+          },
+          "links": [
+            {
+              "title": "View connected client detail",
+              "url": "/d/customer-overview/customer-overview?viewPanel=136",
+              "targetBlank": false
+            }
+          ]
         },
         "overrides": []
       },
@@ -2392,6 +2399,69 @@
           "refId": "A",
           "format": "table",
           "rawSql": "SELECT count(*) AS \"value\" FROM (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.is_wired, cm.satisfaction, cm.signal, cm.noise, cm.radio, cm.tx_rate FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC) latest WHERE is_wired = false AND tx_rate > 0 AND tx_rate < 24000"
+        }
+      ]
+    },
+    {
+      "id": 136,
+      "type": "table",
+      "title": "Connected Clients (detail)",
+      "description": "Every wireless client seen in the last 15 minutes -- the same population the Wi-Fi Clients Connected card counts. Column headers are filterable (funnel icon) for finding a specific device or room AP. Click an AP name to open that site's clients page in the UniFi controller.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 147
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Controller URL"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "AP"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open site clients in UniFi controller",
+                    "url": "${__data.fields[\"Controller URL\"]}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT hostname AS \"Device\", client_mac AS \"MAC\", ap_name AS \"AP\", site_label AS \"Site\", essid AS \"SSID\", CASE WHEN radio = 'ng' THEN '2.4GHz' WHEN radio = 'na' THEN '5GHz' ELSE radio END AS \"Band\", signal AS \"Signal (dBm)\", (signal - noise) AS \"SNR (dB)\", satisfaction AS \"Satisfaction\", tx_rate / 1000 AS \"TX Mbps\", rx_rate / 1000 AS \"RX Mbps\", controller_url AS \"Controller URL\", time AS \"As of\" FROM (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.hostname, cm.client_mac, cm.essid, cm.radio, cm.signal, cm.noise, cm.satisfaction, cm.tx_rate, cm.rx_rate, cm.time, COALESCE(s.site_desc, s.unifi_site_name) AS site_label, ctrl.base_url || '/manage/site/' || s.unifi_site_name || '/clients' AS controller_url, ai.ap_name FROM client_metrics cm JOIN sites s ON s.id = cm.site_id JOIN controllers ctrl ON ctrl.id = s.controller_id LEFT JOIN LATERAL (SELECT ap_name FROM ap_inventory WHERE ap_mac = cm.ap_mac ORDER BY time DESC LIMIT 1) ai ON true WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' AND cm.is_wired = false ORDER BY cm.site_id, cm.client_mac, cm.time DESC) latest ORDER BY \"Site\", \"AP\", \"Device\" NULLS LAST"
         }
       ]
     }
