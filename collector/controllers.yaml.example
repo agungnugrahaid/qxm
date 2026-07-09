@@ -10,6 +10,9 @@ controllers:
   - name: pilot-controller-1
     base_url: "https://192.168.1.5:8443"   # your controller's URL
     is_unifi_os: false                       # true if this is a UDM/UDM Pro console
+    # vendor: "unifi"                        # optional, defaults to "unifi" -- see
+                                              # collector.py's CONTROLLER_POLLERS for
+                                              # what else is supported
     api_user: "api-readonly"
     api_password: "CHANGE_ME"
     sites:

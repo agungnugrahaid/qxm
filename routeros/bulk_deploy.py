@@ -60,6 +60,11 @@ def ensure_router_row(pg_conn, row, new_token):
     wan_interface = row.get("wan_interface") or "ether1"
     wan_interface_backup = row.get("wan_interface_backup") or None
     use_ssl = (row.get("use_ssl") or "").strip().lower() in ("1", "true", "yes")
+    # Optional -- marks routers to hit first via admin-ui's "Deploy critical
+    # only" button when phasing a large rollout. Anything other than
+    # "critical" (including a blank/missing column, for CSVs written before
+    # this existed) is treated as standard.
+    priority = "critical" if (row.get("priority") or "").strip().lower() == "critical" else "standard"
 
     cur = pg_conn.cursor()
     cur.execute("SELECT id, auth_token FROM routers WHERE identity_name = %s", (identity_name,))
@@ -70,15 +75,15 @@ def ensure_router_row(pg_conn, row, new_token):
         token = existing_token or new_token
         cur.execute(
             "UPDATE routers SET mgmt_host = %s, mgmt_port = %s, admin_user = %s, "
-            "admin_password = %s, auth_token = %s, wan_interface = %s, wan_interface_backup = %s, use_ssl = %s WHERE id = %s",
-            (mgmt_host, mgmt_port, admin_user, admin_password, token, wan_interface, wan_interface_backup, use_ssl, router_id),
+            "admin_password = %s, auth_token = %s, wan_interface = %s, wan_interface_backup = %s, use_ssl = %s, priority = %s WHERE id = %s",
+            (mgmt_host, mgmt_port, admin_user, admin_password, token, wan_interface, wan_interface_backup, use_ssl, priority, router_id),
         )
     else:
         token = new_token
         cur.execute(
-            "INSERT INTO routers (customer_id, identity_name, auth_token, mgmt_host, mgmt_port, admin_user, admin_password, wan_interface, wan_interface_backup, use_ssl) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
-            (customer_id, identity_name, token, mgmt_host, mgmt_port, admin_user, admin_password, wan_interface, wan_interface_backup, use_ssl),
+            "INSERT INTO routers (customer_id, identity_name, auth_token, mgmt_host, mgmt_port, admin_user, admin_password, wan_interface, wan_interface_backup, use_ssl, priority) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (customer_id, identity_name, token, mgmt_host, mgmt_port, admin_user, admin_password, wan_interface, wan_interface_backup, use_ssl, priority),
         )
         router_id = cur.fetchone()[0]
 

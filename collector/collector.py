@@ -1,5 +1,5 @@
 """
-collector.py — async poller for UniFi controllers.
+collector.py — async poller for wireless controllers (UniFi today).
 
 Reads controllers.yaml (one or more controllers, each with a list of sites),
 logs into each controller, pulls the client list (stat/sta) for every site
@@ -9,7 +9,18 @@ concurrently, and writes rows into TimescaleDB. Runs forever, sleeping
 This is the pilot-scale version: sequential across controllers, concurrent
 across sites within a controller. For 5 controllers x 50 sites you'd add
 concurrency across controllers too and a semaphore to cap in-flight
-requests — see isp_scale_addendum.md for that discussion.
+requests. Confirmed live this session: a full cycle across 2 controllers /
+5 sites (including a 300+ AP site) takes ~1.1-1.2s against a 300s poll
+interval, so this holds comfortably through single digits of controllers --
+revisit concurrency-across-controllers only if this fleet approaches
+~15-20 controller instances.
+
+Multi-vendor: each controller row in controllers.yaml (and the `controllers`
+table) has a `vendor` field, defaulting to "unifi" for backward
+compatibility with existing config. poll_controller dispatches on it via
+CONTROLLER_POLLERS below -- adding a second vendor (e.g. Ruijie, once its
+API is actually available) means writing one new poll_<vendor>_controller
+function and registering it there, not restructuring poll_all/main_loop.
 """
 
 import asyncio
@@ -48,9 +59,9 @@ def ensure_controller(conn, ctrl):
         controller_id = row[0]
     else:
         cur.execute(
-            "INSERT INTO controllers (name, base_url, api_user, api_password, is_unifi_os) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (ctrl["name"], ctrl["base_url"], ctrl["api_user"], ctrl["api_password"], ctrl["is_unifi_os"]),
+            "INSERT INTO controllers (name, base_url, api_user, api_password, is_unifi_os, vendor) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (ctrl["name"], ctrl["base_url"], ctrl["api_user"], ctrl["api_password"], ctrl["is_unifi_os"], ctrl.get("vendor", "unifi")),
         )
         controller_id = cur.fetchone()[0]
     conn.commit()
@@ -58,7 +69,7 @@ def ensure_controller(conn, ctrl):
     return controller_id
 
 
-def ensure_site(conn, controller_id, site_name):
+def ensure_site(conn, controller_id, site_name, site_desc=None):
     cur = conn.cursor()
     cur.execute(
         "SELECT id FROM sites WHERE controller_id = %s AND unifi_site_name = %s",
@@ -67,15 +78,36 @@ def ensure_site(conn, controller_id, site_name):
     row = cur.fetchone()
     if row:
         site_id = row[0]
+        # Keep the readable name current -- someone can rename a site in
+        # UniFi later (e.g. a rebrand), and this is cheap to just always
+        # re-assert rather than only setting it once at discovery.
+        if site_desc is not None:
+            cur.execute("UPDATE sites SET site_desc = %s WHERE id = %s", (site_desc, site_id))
     else:
         cur.execute(
-            "INSERT INTO sites (controller_id, unifi_site_name) VALUES (%s, %s) RETURNING id",
-            (controller_id, site_name),
+            "INSERT INTO sites (controller_id, unifi_site_name, site_desc) VALUES (%s, %s, %s) RETURNING id",
+            (controller_id, site_name, site_desc),
         )
         site_id = cur.fetchone()[0]
     conn.commit()
     cur.close()
     return site_id
+
+
+async def fetch_site_descs(session, ctrl):
+    """
+    GET /api/self/sites returns every site this account can see on the
+    controller, each with both the internal `name` (the random code used
+    in API URLs, e.g. "gk7em92p") and `desc` (the human label set in the
+    UniFi UI, e.g. "01.0757-01.GRAND-AMBARRUKMO"). One call per
+    controller gets every configured site's readable name in one shot,
+    rather than a separate lookup per site.
+    """
+    api_prefix = f"{ctrl['base_url']}/proxy/network" if ctrl["is_unifi_os"] else ctrl["base_url"]
+    async with session.get(f"{api_prefix}/api/self/sites", ssl=SSL_CTX) as resp:
+        resp.raise_for_status()
+        data = await resp.json()
+    return {s["name"]: s.get("desc") for s in data.get("data", [])}
 
 
 async def poll_site(session, ctrl, site_name, site_id, conn):
@@ -182,7 +214,7 @@ async def poll_site_devices(session, ctrl, site_name, site_id, conn):
     print(f"[{ctrl['name']}/{site_name}] saved {len(rows)} AP inventory rows at {now.isoformat()}")
 
 
-async def poll_controller(ctrl, conn):
+async def poll_unifi_controller(ctrl, conn):
     login_url = f"{ctrl['base_url']}/api/auth/login" if ctrl["is_unifi_os"] else f"{ctrl['base_url']}/api/login"
 
     # aiohttp's default cookie jar silently drops cookies for IP-address
@@ -201,10 +233,21 @@ async def poll_controller(ctrl, conn):
         login_resp.raise_for_status()
 
         controller_id = ensure_controller(conn, ctrl)
+
+        # Best-effort -- readable site names are a nice-to-have, not
+        # something that should block client/AP metric collection (the
+        # actual point of this poll cycle) if this call fails for any
+        # reason.
+        try:
+            site_descs = await fetch_site_descs(session, ctrl)
+        except Exception as e:
+            print(f"[{ctrl['name']}] couldn't fetch site names — {e}")
+            site_descs = {}
+
         tasks = []
         site_labels = []
         for site_name in ctrl["sites"]:
-            site_id = ensure_site(conn, controller_id, site_name)
+            site_id = ensure_site(conn, controller_id, site_name, site_descs.get(site_name))
             tasks.append(poll_site(session, ctrl, site_name, site_id, conn))
             site_labels.append(f"{site_name} (clients)")
             tasks.append(poll_site_devices(session, ctrl, site_name, site_id, conn))
@@ -214,6 +257,26 @@ async def poll_controller(ctrl, conn):
         for label, result in zip(site_labels, results):
             if isinstance(result, Exception):
                 print(f"[{ctrl['name']}/{label}] error — {result}")
+
+
+# Dispatch table so a new vendor (e.g. Ruijie, once its API is actually in
+# hand) is "write one poll_<vendor>_controller function and add it here,"
+# not a restructure of poll_all/main_loop. Every entry must accept
+# (ctrl, conn) and follow the same contract poll_unifi_controller does:
+# raise on a controller-level failure (login, unreachable, etc.) so
+# poll_all's own try/except can log and move on to the next controller
+# without killing the whole cycle.
+CONTROLLER_POLLERS = {
+    "unifi": poll_unifi_controller,
+}
+
+
+async def poll_controller(ctrl, conn):
+    vendor = ctrl.get("vendor", "unifi")
+    poller = CONTROLLER_POLLERS.get(vendor)
+    if poller is None:
+        raise ValueError(f"no poller registered for vendor {vendor!r} (controller {ctrl['name']!r})")
+    await poller(ctrl, conn)
 
 
 async def poll_all(config, conn):

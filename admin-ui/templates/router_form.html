@@ -49,6 +49,15 @@
     </div>
 
     <div class="field">
+      <label>Rollout priority</label>
+      <select name="priority">
+        <option value="standard" {% if not router or router.priority != 'critical' %}selected{% endif %}>Standard</option>
+        <option value="critical" {% if router and router.priority == 'critical' %}selected{% endif %}>Critical</option>
+      </select>
+      <small>Controls which routers "Deploy critical only" on the router list targets -- for phasing a large rollout.</small>
+    </div>
+
+    <div class="field">
       <label>
         <input type="checkbox" name="use_ssl" value="true" style="width:auto" {% if router and router.use_ssl %}checked{% endif %}>
         Use api-ssl (TLS, usually port 8729) instead of plaintext api

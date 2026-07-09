@@ -9,7 +9,7 @@
   <table>
     <tr>
       <th>Controller</th>
-      <th>Site (UniFi name)</th>
+      <th>Site name</th>
       <th>Discovered</th>
       <th>Customer</th>
       <th></th>
@@ -17,7 +17,10 @@
     {% for s in sites %}
     <tr>
       <td>{{ s.controller_name or "—" }}</td>
-      <td>{{ s.unifi_site_name }}</td>
+      <td>
+        {{ s.site_desc or s.unifi_site_name }}
+        {% if s.site_desc %}<small style="display:block; color:#6b7280;">{{ s.unifi_site_name }}</small>{% endif %}
+      </td>
       <td>{{ s.discovered_at }}</td>
       <td>
         {% if s.customer_name %}

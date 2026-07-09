@@ -3,8 +3,12 @@
   <h1>Routers</h1>
   <p>
     <a class="btn primary" href="/routers/new">+ Add router</a>
-    <form class="inline" method="post" action="/deploy-all" onsubmit="return confirm('Push scripts to every router now?');">
+    <form class="inline" method="post" action="/deploy-all" onsubmit="return confirm('Push scripts to every router now? This runs in the background -- refresh this page to watch progress.');">
       <button class="btn" type="submit">Deploy to all</button>
+    </form>
+    <form class="inline" method="post" action="/deploy-all" onsubmit="return confirm('Push scripts to routers marked Critical only? This runs in the background -- refresh this page to watch progress.');">
+      <input type="hidden" name="priority" value="critical">
+      <button class="btn" type="submit">Deploy critical only</button>
     </form>
   </p>
 
@@ -14,7 +18,9 @@
       <th>Customer</th>
       <th>Mgmt host</th>
       <th>Status</th>
+      <th>Priority</th>
       <th>Last seen</th>
+      <th>Last deploy</th>
       <th></th>
     </tr>
     {% for r in routers %}
@@ -29,7 +35,17 @@
           <span class="badge offline">offline</span>
         {% endif %}
       </td>
+      <td>{% if r.priority == 'critical' %}<span class="badge offline">critical</span>{% else %}standard{% endif %}</td>
       <td>{{ r.last_seen_at or "never" }}</td>
+      <td>
+        {% if r.last_deploy_status %}
+          <span class="{{ 'result-ok' if r.last_deploy_status == 'ok' else 'result-fail' }}">{{ r.last_deploy_status }}</span>
+          <small style="display:block;">{{ r.last_deploy_at }}</small>
+          <small style="display:block;">{{ r.last_deploy_detail }}</small>
+        {% else %}
+          never
+        {% endif %}
+      </td>
       <td>
         <a class="btn" href="/routers/{{ r.id }}/edit">Edit</a>
         <a class="btn" href="/config-snapshots/{{ r.id }}">Config History</a>

@@ -9,7 +9,10 @@ Pages:
   GET  /routers/{id}/edit   edit-router form
   POST /routers/{id}/edit   update row
   POST /routers/{id}/deploy push the qoe-push scripts to that one router now
-  POST /deploy-all          push to every router, show a per-router result summary
+  POST /deploy-all          kick off a background push to every router (or, with
+                            priority="critical", only routers marked critical) --
+                            returns immediately; watch progress via each router's
+                            last_deploy_status/at/detail on GET /
   GET  /customers           list + quick-add customers (routers need one)
   POST /customers/new       create a customer
   GET  /sites               list UniFi sites (auto-discovered by the collector),
@@ -33,6 +36,7 @@ import html
 import os
 import re
 import secrets
+import threading
 from datetime import datetime, timezone
 
 import psycopg2
@@ -127,14 +131,15 @@ def create_router(
     wan_interface: str = Form("ether1"),
     wan_interface_backup: str = Form(""),
     use_ssl: bool = Form(False),
+    priority: str = Form("standard"),
 ):
     token = secrets.token_hex(24)
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO routers (customer_id, identity_name, auth_token, mgmt_host, mgmt_port, admin_user, admin_password, wan_interface, wan_interface_backup, use_ssl) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (customer_id, identity_name, token, mgmt_host, mgmt_port, admin_user, admin_password, wan_interface, wan_interface_backup or None, use_ssl),
+        "INSERT INTO routers (customer_id, identity_name, auth_token, mgmt_host, mgmt_port, admin_user, admin_password, wan_interface, wan_interface_backup, use_ssl, priority) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (customer_id, identity_name, token, mgmt_host, mgmt_port, admin_user, admin_password, wan_interface, wan_interface_backup or None, use_ssl, priority),
     )
     conn.commit()
     conn.close()
@@ -167,13 +172,14 @@ def update_router(
     wan_interface: str = Form("ether1"),
     wan_interface_backup: str = Form(""),
     use_ssl: bool = Form(False),
+    priority: str = Form("standard"),
 ):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         "UPDATE routers SET identity_name=%s, customer_id=%s, mgmt_host=%s, mgmt_port=%s, "
-        "admin_user=%s, admin_password=%s, wan_interface=%s, wan_interface_backup=%s, use_ssl=%s WHERE id=%s",
-        (identity_name, customer_id, mgmt_host, mgmt_port, admin_user, admin_password, wan_interface, wan_interface_backup or None, use_ssl, router_id),
+        "admin_user=%s, admin_password=%s, wan_interface=%s, wan_interface_backup=%s, use_ssl=%s, priority=%s WHERE id=%s",
+        (identity_name, customer_id, mgmt_host, mgmt_port, admin_user, admin_password, wan_interface, wan_interface_backup or None, use_ssl, priority, router_id),
     )
     conn.commit()
     conn.close()
@@ -201,6 +207,60 @@ def sync_identity_name(router_id, current_identity, actual_identity):
     return actual_identity
 
 
+def deploy_and_record(router):
+    """
+    Pushes to one router and records the outcome on its own row
+    (last_deploy_status/at/detail) so a background batch (deploy_all_bg)
+    gives live per-router progress instead of only a result visible at
+    the end of one blocking HTTP request. Opens its own DB connection --
+    callers may be running in a background thread with no request-scoped
+    connection to reuse.
+
+    Returns the same {"identity_name", "ok", "detail"} shape
+    deploy_result.html already expects, so deploy_router (still
+    synchronous -- a single router is quick enough not to need
+    backgrounding) can keep using it directly.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        actual_identity = push_to_router(
+            router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TPL, SFTP_CONFIG, SYSLOG_CONFIG,
+            baseline_templates=BASELINE_TEMPLATES, radius_config=RADIUS_CONFIG, gmedia_cidrs=GMEDIA_CIDRS,
+        )
+        renamed_to = sync_identity_name(router["id"], router["identity_name"], actual_identity)
+        detail = "deployed" if not renamed_to else f"deployed (identity_name synced: {router['identity_name']!r} -> {renamed_to!r})"
+        result = {"identity_name": renamed_to or router["identity_name"], "ok": True, "detail": detail}
+    except Exception as e:
+        result = {"identity_name": router["identity_name"], "ok": False, "detail": str(e)}
+
+    cur.execute(
+        "UPDATE routers SET last_deploy_status = %s, last_deploy_at = %s, last_deploy_detail = %s WHERE id = %s",
+        ("ok" if result["ok"] else "failed", datetime.now(timezone.utc), result["detail"], router["id"]),
+    )
+    conn.commit()
+    conn.close()
+    return result
+
+
+def deploy_all_bg(router_ids):
+    """
+    Runs in a background thread (see /deploy-all) -- deliberately not
+    async/awaited from the request handler, since 200 routers at a few
+    seconds each is a 10-30+ minute batch that must not hold an HTTP
+    request (and its proxy/browser timeout) open the whole time. Progress
+    is visible via each router's own last_deploy_status/at/detail
+    (routers_list.html), not via this function's return value.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM routers WHERE id = ANY(%s) ORDER BY identity_name", (router_ids,))
+    routers = cur.fetchall()
+    conn.close()
+    for router in routers:
+        deploy_and_record(router)
+
+
 @app.post("/routers/{router_id}/deploy")
 def deploy_router(request: Request, router_id: int):
     conn = get_conn()
@@ -209,43 +269,33 @@ def deploy_router(request: Request, router_id: int):
     router = cur.fetchone()
     conn.close()
 
-    results = []
-    try:
-        actual_identity = push_to_router(
-            router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TPL, SFTP_CONFIG, SYSLOG_CONFIG,
-            baseline_templates=BASELINE_TEMPLATES, radius_config=RADIUS_CONFIG, gmedia_cidrs=GMEDIA_CIDRS,
-        )
-        renamed_to = sync_identity_name(router_id, router["identity_name"], actual_identity)
-        detail = "deployed" if not renamed_to else f"deployed (identity_name synced: {router['identity_name']!r} -> {renamed_to!r})"
-        results.append({"identity_name": renamed_to or router["identity_name"], "ok": True, "detail": detail})
-    except Exception as e:
-        results.append({"identity_name": router["identity_name"], "ok": False, "detail": str(e)})
-
-    return templates.TemplateResponse("deploy_result.html", {"request": request, "results": results})
+    result = deploy_and_record(router)
+    return templates.TemplateResponse("deploy_result.html", {"request": request, "results": [result]})
 
 
 @app.post("/deploy-all")
-def deploy_all(request: Request):
+def deploy_all(priority: str = Form(None)):
+    """
+    priority: pass "critical" to only deploy routers marked
+    priority='critical' (the phased-rollout "critical customer first"
+    path); omitted/blank deploys every router, same as before.
+
+    Returns immediately once the background thread is started -- refresh
+    the router list to watch last_deploy_status/at/detail update per
+    router as it works through the batch, rather than waiting for one
+    big result table at the end.
+    """
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM routers ORDER BY identity_name")
-    routers = cur.fetchall()
+    if priority:
+        cur.execute("SELECT id FROM routers WHERE priority = %s", (priority,))
+    else:
+        cur.execute("SELECT id FROM routers")
+    router_ids = [row["id"] for row in cur.fetchall()]
     conn.close()
 
-    results = []
-    for router in routers:
-        try:
-            actual_identity = push_to_router(
-                router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TPL, SFTP_CONFIG, SYSLOG_CONFIG,
-                baseline_templates=BASELINE_TEMPLATES, radius_config=RADIUS_CONFIG, gmedia_cidrs=GMEDIA_CIDRS,
-            )
-            renamed_to = sync_identity_name(router["id"], router["identity_name"], actual_identity)
-            detail = "deployed" if not renamed_to else f"deployed (identity_name synced: {router['identity_name']!r} -> {renamed_to!r})"
-            results.append({"identity_name": renamed_to or router["identity_name"], "ok": True, "detail": detail})
-        except Exception as e:
-            results.append({"identity_name": router["identity_name"], "ok": False, "detail": str(e)})
-
-    return templates.TemplateResponse("deploy_result.html", {"request": request, "results": results})
+    threading.Thread(target=deploy_all_bg, args=(router_ids,), daemon=True).start()
+    return RedirectResponse("/", status_code=303)
 
 
 @app.get("/customers")

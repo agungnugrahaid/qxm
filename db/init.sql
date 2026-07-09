@@ -9,7 +9,10 @@ CREATE TABLE controllers (
     base_url TEXT NOT NULL,
     api_user TEXT NOT NULL,
     api_password TEXT NOT NULL,
-    is_unifi_os BOOLEAN DEFAULT FALSE
+    is_unifi_os BOOLEAN DEFAULT FALSE,
+    -- which vendor's API this controller speaks -- see collector.py's
+    -- vendor-dispatch poll_controller. Everything today is UniFi.
+    vendor TEXT DEFAULT 'unifi'
 );
 
 CREATE TABLE customers (
@@ -22,6 +25,10 @@ CREATE TABLE sites (
     id SERIAL PRIMARY KEY,
     controller_id INT REFERENCES controllers(id),
     unifi_site_name TEXT NOT NULL,
+    -- UniFi's own human-readable site label (the "desc" field from
+    -- GET /api/self/sites) -- unifi_site_name above is the internal
+    -- random-code identifier used in API URLs, not meant for display.
+    site_desc TEXT,
     customer_id INT REFERENCES customers(id),
     discovered_at TIMESTAMPTZ DEFAULT now(),
     UNIQUE (controller_id, unifi_site_name)
@@ -50,7 +57,16 @@ CREATE TABLE routers (
     -- api-ssl (TLS-wrapped, port 8729) instead of plaintext api (8728) --
     -- requires the router to have a certificate assigned to its api-ssl
     -- service first.
-    use_ssl BOOLEAN DEFAULT FALSE
+    use_ssl BOOLEAN DEFAULT FALSE,
+    -- deploy-progress tracking so a background /deploy-all gives NOC live
+    -- per-router visibility instead of only the result of one blocking
+    -- HTTP request (see admin-ui/main.py).
+    last_deploy_status TEXT,
+    last_deploy_at TIMESTAMPTZ,
+    last_deploy_detail TEXT,
+    -- lets a phased rollout ("critical customer first") target a subset
+    -- of routers instead of only all-or-nothing.
+    priority TEXT DEFAULT 'standard'
 );
 
 CREATE TABLE client_metrics (
