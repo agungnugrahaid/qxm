@@ -174,9 +174,19 @@
             :set totalAddresses ($totalAddresses + $blockSize)
         } else={
             :local dashPos [:find $rangeItem "-"]
-            :local startIp [:pick $rangeItem 0 $dashPos]
-            :local endIp [:pick $rangeItem ($dashPos + 1) [:len $rangeItem]]
-            :set totalAddresses ($totalAddresses + ([:toip $endIp] - [:toip $startIp] + 1))
+            :if ([:typeof $dashPos] != "nil") do={
+                :local startIp [:pick $rangeItem 0 $dashPos]
+                :local endIp [:pick $rangeItem ($dashPos + 1) [:len $rangeItem]]
+                :set totalAddresses ($totalAddresses + ([:toip $endIp] - [:toip $startIp] + 1))
+            } else={
+                # Bare single-IP range (e.g. "10.20.202.2" -- no dash, no
+                # CIDR). Without this guard, :pick with a nil dashPos
+                # produces garbage that RouterOS renders as an IP-typed
+                # value (confirmed live: "total_addresses":0.20.202.3),
+                # which breaks the JSON payload and gets the whole push
+                # rejected with a 422.
+                :set totalAddresses ($totalAddresses + 1)
+            }
         }
     }
     # Leases are tagged with a "server" (the dhcp-server name), not the
