@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 62,
+  "version": 63,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -110,7 +110,8 @@
           "format": "table",
           "rawSql": "SELECT count(*) AS \"value\" FROM routers WHERE customer_id = $customer_id AND (last_seen_at IS NULL OR last_seen_at < now() - interval '15 minutes')"
         }
-      ]
+      ],
+      "description": "Routers that haven't reported in over 15 minutes. Lower is better -- 0 means every router is alive; anything here means a customer router is unreachable or down."
     },
     {
       "id": 109,
@@ -169,7 +170,8 @@
           "format": "table",
           "rawSql": "SELECT avg(jitter) AS \"value\" FROM (SELECT DISTINCT ON (pm.router_id, pm.target_name) pm.jitter_ms AS jitter FROM path_metrics pm JOIN routers r ON r.id = pm.router_id WHERE r.customer_id = $customer_id ORDER BY pm.router_id, pm.target_name, pm.time DESC) latest"
         }
-      ]
+      ],
+      "description": "How much the connection's delay varies from moment to moment. Lower is better -- high jitter makes voice and video calls choppy even when average speed looks fine."
     },
     {
       "id": 1,
@@ -898,7 +900,8 @@
           "format": "table",
           "rawSql": "SELECT round(100.0 * conntrack_count / NULLIF(conntrack_max,0), 1) AS \"value\" FROM (SELECT DISTINCT ON (rm.router_id) rm.conntrack_count, rm.conntrack_max FROM router_metrics rm JOIN routers r ON r.id = rm.router_id WHERE r.customer_id = $customer_id ORDER BY rm.router_id, rm.time DESC) latest ORDER BY value DESC NULLS LAST LIMIT 1"
         }
-      ]
+      ],
+      "description": "Highest connection-tracking table usage across this customer's routers. Lower is better -- at 100% the router starts refusing new connections, often felt as 'internet randomly stops working'."
     },
     {
       "id": 108,
@@ -957,7 +960,8 @@
           "format": "table",
           "rawSql": "SELECT avg(loss) AS \"value\" FROM (SELECT DISTINCT ON (pm.router_id, pm.target_name) pm.packet_loss_pct AS loss FROM path_metrics pm JOIN routers r ON r.id = pm.router_id WHERE r.customer_id = $customer_id ORDER BY pm.router_id, pm.target_name, pm.time DESC) latest"
         }
-      ]
+      ],
+      "description": "Average share of test packets lost on the path from the customer's routers to the internet (measured every 5 minutes). Lower is better -- anything above 1-2% is noticeable in calls, gaming, and video."
     },
     {
       "id": 110,
@@ -1016,7 +1020,8 @@
           "format": "table",
           "rawSql": "SELECT avg(rtt) AS \"value\" FROM (SELECT DISTINCT ON (pm.router_id, pm.target_name) pm.rtt_avg_ms AS rtt FROM path_metrics pm JOIN routers r ON r.id = pm.router_id WHERE r.customer_id = $customer_id ORDER BY pm.router_id, pm.target_name, pm.time DESC) latest"
         }
-      ]
+      ],
+      "description": "Average round-trip time from the customer's routers to the internet. Lower is better -- under ~30ms feels instant, over ~100ms feels sluggish."
     },
     {
       "id": 113,
@@ -1412,7 +1417,8 @@
           "format": "table",
           "rawSql": "WITH latest AS (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.signal, cm.noise, cm.satisfaction, 100.0 * cm.tx_retries / NULLIF(cm.wifi_tx_attempts, 0) AS retry_pct FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC) SELECT count(*) AS \"value\" FROM latest WHERE retry_pct > 20 OR satisfaction < 80 OR signal < -75"
         }
-      ]
+      ],
+      "description": "Wireless devices currently having a poor experience (high retries, low satisfaction score, or weak signal). Lower is better. Click to see each affected device and its likely cause."
     },
     {
       "id": 118,
@@ -1471,7 +1477,8 @@
           "format": "table",
           "rawSql": "SELECT round(100.0 * count(*) FILTER (WHERE state = 1) / NULLIF(count(*), 0), 1) AS \"value\" FROM (SELECT DISTINCT ON (ai.ap_mac) ai.state FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id WHERE s.customer_id = $customer_id AND ai.time > now() - interval '15 minutes' ORDER BY ai.ap_mac, ai.time DESC) latest"
         }
-      ]
+      ],
+      "description": "Share of this customer's access points currently online. Higher is better -- 100% means every AP is up."
     },
     {
       "id": 119,
@@ -1537,7 +1544,8 @@
           "format": "table",
           "rawSql": "SELECT count(*) AS \"value\" FROM (SELECT DISTINCT ON (ai.ap_mac) ai.state FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id WHERE s.customer_id = $customer_id AND ai.time > now() - interval '15 minutes' ORDER BY ai.ap_mac, ai.time DESC) latest WHERE state != 1 OR state IS NULL"
         }
-      ]
+      ],
+      "description": "Access points the controller reports as disconnected (last 15 minutes). Lower is better -- 0 means all APs are up. Click to see exactly which APs are down."
     },
     {
       "id": 121,
@@ -1596,7 +1604,8 @@
           "format": "table",
           "rawSql": "SELECT round(avg(100.0 * tx_retries / NULLIF(wifi_tx_attempts, 0)), 1) AS \"value\" FROM (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.tx_retries, cm.wifi_tx_attempts FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC) latest"
         }
-      ]
+      ],
+      "description": "Share of Wi-Fi transmissions that had to be re-sent, averaged across wireless clients. Lower is better -- high retries mean crowded airwaves or interference, felt as slow Wi-Fi even with full signal bars."
     },
     {
       "id": 122,
@@ -1655,7 +1664,8 @@
           "format": "table",
           "rawSql": "SELECT max(cpu_load_pct) AS \"value\" FROM (SELECT DISTINCT ON (rm.router_id) rm.cpu_load_pct FROM router_metrics rm JOIN routers r ON r.id = rm.router_id WHERE r.customer_id = $customer_id ORDER BY rm.router_id, rm.time DESC) latest"
         }
-      ]
+      ],
+      "description": "Highest CPU load across this customer's routers. Lower is better -- a router pegged at 100% delays all traffic passing through it."
     },
     {
       "id": 123,
@@ -1710,7 +1720,8 @@
           "format": "table",
           "rawSql": "SELECT count(DISTINCT router_id) AS \"value\" FROM (SELECT DISTINCT ON (hm.router_id, hm.gauge_name) hm.router_id, hm.gauge_name, hm.value FROM health_metrics hm JOIN routers r ON r.id = hm.router_id WHERE r.customer_id = $customer_id ORDER BY hm.router_id, hm.gauge_name, hm.time DESC) latest WHERE (gauge_name LIKE 'psu%-state' AND value != 'ok') OR (gauge_name = 'fan-state' AND value != 'ok')"
         }
-      ]
+      ],
+      "description": "Hardware sensors (power supplies, fans) not reporting OK across this customer's routers. Lower is better -- 0 is normal; anything here deserves attention before it becomes an outage."
     },
     {
       "id": 124,
@@ -1769,7 +1780,8 @@
           "format": "table",
           "rawSql": "SELECT max(utilization_pct) AS \"value\" FROM (SELECT DISTINCT ON (dm.router_id, dm.pool_name) dm.utilization_pct FROM dhcp_pool_metrics dm JOIN routers r ON r.id = dm.router_id WHERE r.customer_id = $customer_id ORDER BY dm.router_id, dm.pool_name, dm.time DESC) latest"
         }
-      ]
+      ],
+      "description": "Highest share of IP addresses handed out from any single address pool. Lower is better -- at 100% new devices can't get an address and simply won't connect."
     },
     {
       "id": 125,
@@ -1909,7 +1921,8 @@
           "expr": "count_over_time({job=\"mikrotik_syslog\", host=\"${router:text}\"} |~ `login failure for user \\S+ from \\S+ via \\S+` [1h])",
           "queryType": "instant"
         }
-      ]
+      ],
+      "description": "Failed admin login attempts on this router in the last hour. Lower is better -- 0 is normal; a burst usually means someone is guessing passwords (brute force). Click through to the admin session log to see who and from where."
     },
     {
       "id": 128,
@@ -1974,7 +1987,7 @@
       "id": 129,
       "type": "stat",
       "title": "Wi-Fi Clients Connected",
-      "description": "Wireless clients seen in the last 15 minutes, across all this customer's sites/controllers.",
+      "description": "Wireless clients seen in the last 15 minutes, across all this customer's sites/controllers. Neither good nor bad by itself -- context for reading the other wireless cards.",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
@@ -2026,7 +2039,7 @@
       "id": 130,
       "type": "stat",
       "title": "Avg Satisfaction",
-      "description": "Mean of UniFi's own per-client experience score (0-100) over currently-connected wireless clients.",
+      "description": "Mean of UniFi's own per-client experience score (0-100) over currently-connected wireless clients. Higher is better -- above 80 is healthy, below 60 means many clients are struggling.",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
@@ -2086,7 +2099,7 @@
       "id": 131,
       "type": "stat",
       "title": "Avg SNR",
-      "description": "Mean signal-to-noise ratio across wireless clients -- the real link-quality number; good signal on a noisy channel still performs badly.",
+      "description": "Mean signal-to-noise ratio across wireless clients. Higher is better -- above 25dB is healthy; good signal on a noisy channel still performs badly, which is what this catches.",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
@@ -2146,7 +2159,7 @@
       "id": 132,
       "type": "stat",
       "title": "2.4GHz Client Share",
-      "description": "Share of wireless clients on 2.4GHz. A rising share means clients are falling off 5GHz (coverage gaps, band-steering misconfig, legacy devices) onto the slower, more congested band.",
+      "description": "Share of wireless clients on 2.4GHz. Lower is better -- a rising share means clients are falling off 5GHz (coverage gaps, band-steering misconfig, legacy devices) onto the slower, more congested band.",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
@@ -2206,7 +2219,7 @@
       "id": 133,
       "type": "stat",
       "title": "Peak Channel Util 2.4G",
-      "description": "Highest 2.4GHz airtime utilization on any single AP radio right now -- congestion at the radio level, before it shows up as retries.",
+      "description": "Highest 2.4GHz airtime utilization on any single AP radio right now. Lower is better -- above ~80% the radio is saturated and every client on it slows down, before it even shows up as retries.",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
@@ -2266,7 +2279,7 @@
       "id": 134,
       "type": "stat",
       "title": "Peak Channel Util 5G",
-      "description": "Highest 5GHz airtime utilization on any single AP radio right now.",
+      "description": "Highest 5GHz airtime utilization on any single AP radio right now. Lower is better -- above ~80% the radio is saturated and every client on it slows down.",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
@@ -2326,7 +2339,7 @@
       "id": 135,
       "type": "stat",
       "title": "Low-Rate Clients",
-      "description": "Wireless clients negotiating a TX rate under 24 Mbps -- legacy or edge-of-coverage devices that consume disproportionate airtime and slow the whole AP down.",
+      "description": "Wireless clients negotiating a TX rate under 24 Mbps -- legacy or edge-of-coverage devices. Lower is better -- these consume disproportionate airtime and slow the whole AP down for everyone.",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
