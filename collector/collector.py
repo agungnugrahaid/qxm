@@ -132,6 +132,7 @@ async def poll_site(session, ctrl, site_name, site_id, conn):
             now, site_id, c.get("mac"), c.get("ap_mac"), c.get("signal"), c.get("satisfaction"), c.get("radio"),
             c.get("tx_retries"), c.get("wifi_tx_attempts"), c.get("tx_rate"), c.get("rx_rate"),
             c.get("noise"), c.get("channel"), c.get("essid"), c.get("is_wired"), c.get("hostname"),
+            c.get("ip"),
         )
         for c in data.get("data", [])
     ]
@@ -140,8 +141,8 @@ async def poll_site(session, ctrl, site_name, site_id, conn):
         cur = conn.cursor()
         cur.executemany(
             "INSERT INTO client_metrics (time, site_id, client_mac, ap_mac, signal, satisfaction, radio, "
-            "tx_retries, wifi_tx_attempts, tx_rate, rx_rate, noise, channel, essid, is_wired, hostname) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "tx_retries, wifi_tx_attempts, tx_rate, rx_rate, noise, channel, essid, is_wired, hostname, ip) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             rows,
         )
         conn.commit()

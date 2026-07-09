@@ -85,7 +85,10 @@ CREATE TABLE client_metrics (
     channel INT,
     essid TEXT,
     is_wired BOOLEAN,
-    hostname TEXT
+    hostname TEXT,
+    -- controller-reported client IP -- NOC incident lookups often start
+    -- from an IP (firewall log, abuse report) rather than a device name.
+    ip TEXT
 );
 SELECT create_hypertable('client_metrics', 'time');
 CREATE INDEX ON client_metrics (site_id, time DESC);
