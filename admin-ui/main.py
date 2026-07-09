@@ -56,11 +56,20 @@ SYSLOG_CONFIG = {
     "host": os.environ.get("SYSLOG_HOST", "monitor.yourisp.com"),
     "port": os.environ.get("SYSLOG_PORT", "1514"),
 }
+RADIUS_CONFIG = {
+    "secret1": os.environ.get("RADIUS_SERVER_1_SECRET", "changeme"),
+    "secret2": os.environ.get("RADIUS_SERVER_2_SECRET", "changeme"),
+}
+# Same CIDR set as SFTP's own allowlist -- see
+# routeros/qoe-baseline-hardening-v7.rsc's header comment for why this is
+# reused as the router-side management-access allowlist too, rather than
+# tracked as a second separate list.
+GMEDIA_CIDRS = [c.strip() for c in os.environ.get("SFTP_ALLOWED_CIDRS", "").split(",") if c.strip()]
 
 app = FastAPI(title="QoE Fleet Admin")
 templates = Jinja2Templates(directory="templates")
 
-METRICS_TEMPLATES, FIRMWARE_TPL = load_templates()
+METRICS_TEMPLATES, FIRMWARE_TPL, BASELINE_TEMPLATES = load_templates()
 
 
 def get_conn():
@@ -202,7 +211,10 @@ def deploy_router(request: Request, router_id: int):
 
     results = []
     try:
-        actual_identity = push_to_router(router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TPL, SFTP_CONFIG, SYSLOG_CONFIG)
+        actual_identity = push_to_router(
+            router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TPL, SFTP_CONFIG, SYSLOG_CONFIG,
+            baseline_templates=BASELINE_TEMPLATES, radius_config=RADIUS_CONFIG, gmedia_cidrs=GMEDIA_CIDRS,
+        )
         renamed_to = sync_identity_name(router_id, router["identity_name"], actual_identity)
         detail = "deployed" if not renamed_to else f"deployed (identity_name synced: {router['identity_name']!r} -> {renamed_to!r})"
         results.append({"identity_name": renamed_to or router["identity_name"], "ok": True, "detail": detail})
@@ -223,7 +235,10 @@ def deploy_all(request: Request):
     results = []
     for router in routers:
         try:
-            actual_identity = push_to_router(router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TPL, SFTP_CONFIG, SYSLOG_CONFIG)
+            actual_identity = push_to_router(
+                router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TPL, SFTP_CONFIG, SYSLOG_CONFIG,
+                baseline_templates=BASELINE_TEMPLATES, radius_config=RADIUS_CONFIG, gmedia_cidrs=GMEDIA_CIDRS,
+            )
             renamed_to = sync_identity_name(router["id"], router["identity_name"], actual_identity)
             detail = "deployed" if not renamed_to else f"deployed (identity_name synced: {router['identity_name']!r} -> {renamed_to!r})"
             results.append({"identity_name": renamed_to or router["identity_name"], "ok": True, "detail": detail})

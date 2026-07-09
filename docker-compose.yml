@@ -66,6 +66,9 @@ services:
       SYSLOG_PORT: ${SYSLOG_PORT:-1514}
       GRAFANA_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GRAFANA_PUBLIC_URL: ${GRAFANA_PUBLIC_URL:-https://grafana.yourisp.com}
+      SFTP_ALLOWED_CIDRS: ${SFTP_ALLOWED_CIDRS:-}
+      RADIUS_SERVER_1_SECRET: ${RADIUS_SERVER_1_SECRET:-changeme}
+      RADIUS_SERVER_2_SECRET: ${RADIUS_SERVER_2_SECRET:-changeme}
     volumes:
       # Read-only: source template for generating customer-locked
       # dashboard clones (see dashboard_share.py). Generated dashboards

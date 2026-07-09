@@ -43,6 +43,11 @@ SYSLOG_CONFIG = {
     "host": os.environ.get("SYSLOG_HOST", "monitor.yourisp.com"),
     "port": os.environ.get("SYSLOG_PORT", "1514"),
 }
+RADIUS_CONFIG = {
+    "secret1": os.environ.get("RADIUS_SERVER_1_SECRET", "changeme"),
+    "secret2": os.environ.get("RADIUS_SERVER_2_SECRET", "changeme"),
+}
+GMEDIA_CIDRS = [c.strip() for c in os.environ.get("SFTP_ALLOWED_CIDRS", "").split(",") if c.strip()]
 
 
 def ensure_router_row(pg_conn, row, new_token):
@@ -94,7 +99,7 @@ def ensure_router_row(pg_conn, row, new_token):
 
 
 def main():
-    metrics_templates, firmware_tpl = load_templates()
+    metrics_templates, firmware_tpl, baseline_templates = load_templates()
     pg_conn = psycopg2.connect(DATABASE_URL)
 
     ok, failed = 0, 0
@@ -104,7 +109,10 @@ def main():
             identity_name = row.get("identity_name")
             try:
                 router = ensure_router_row(pg_conn, row, secrets.token_hex(24))
-                actual_identity = push_to_router(router, INGEST_BASE_URL, metrics_templates, firmware_tpl, SFTP_CONFIG, SYSLOG_CONFIG)
+                actual_identity = push_to_router(
+                    router, INGEST_BASE_URL, metrics_templates, firmware_tpl, SFTP_CONFIG, SYSLOG_CONFIG,
+                    baseline_templates=baseline_templates, radius_config=RADIUS_CONFIG, gmedia_cidrs=GMEDIA_CIDRS,
+                )
                 if actual_identity != router["identity_name"]:
                     cur = pg_conn.cursor()
                     cur.execute("UPDATE routers SET identity_name = %s WHERE id = %s", (actual_identity, router["id"]))

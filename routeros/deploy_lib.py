@@ -25,15 +25,20 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 METRICS_V7_TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "qoe-push-metrics-v7.rsc")
 METRICS_V6_TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "qoe-push-metrics-v6.rsc")
 FIRMWARE_TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "qoe-push-firmware.rsc")
+BASELINE_V7_TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "qoe-baseline-hardening-v7.rsc")
+BASELINE_V6_TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "qoe-baseline-hardening-v6.rsc")
 
 
 def load_templates():
     """
-    Returns (metrics_templates, firmware_tpl) where metrics_templates is
-    {"v7": ..., "v6": ...} -- push_to_router picks between them based on
-    the target router's actual RouterOS major version (see
-    routeros/README.md for why: `/ping ... as-value` isn't parseable at
-    all on at least one RouterOS 6.49.8 long-term build).
+    Returns (metrics_templates, firmware_tpl, baseline_templates) where
+    metrics_templates/baseline_templates are {"v7": ..., "v6": ...} --
+    push_to_router picks between them based on the target router's actual
+    RouterOS major version (see routeros/README.md for why: `/ping ...
+    as-value` isn't parseable at all on at least one RouterOS 6.49.8
+    long-term build -- confirmed separately that the baseline script's
+    v7-only NTP syntax hits the exact same class of hard parse failure on
+    v6, hence its own v6/v7 split too).
     """
     with open(METRICS_V7_TEMPLATE_PATH) as f:
         metrics_v7 = f.read()
@@ -41,7 +46,25 @@ def load_templates():
         metrics_v6 = f.read()
     with open(FIRMWARE_TEMPLATE_PATH) as f:
         firmware_tpl = f.read()
-    return {"v7": metrics_v7, "v6": metrics_v6}, firmware_tpl
+    with open(BASELINE_V7_TEMPLATE_PATH) as f:
+        baseline_v7 = f.read()
+    with open(BASELINE_V6_TEMPLATE_PATH) as f:
+        baseline_v6 = f.read()
+    return (
+        {"v7": metrics_v7, "v6": metrics_v6},
+        firmware_tpl,
+        {"v7": baseline_v7, "v6": baseline_v6},
+    )
+
+
+def build_ros_array_literal(values):
+    """
+    Renders a Python list of strings as a RouterOS array literal, e.g.
+    ["a", "b"] -> '{"a";"b"}' -- semicolon-separated, not comma (RouterOS
+    uses comma inside a single value like a dst-port list, so a real
+    array needs the other separator to stay unambiguous).
+    """
+    return "{" + ";".join(f'"{v}"' for v in values) + "}"
 
 
 def detect_major_version(api):
@@ -186,7 +209,10 @@ def run_script(api, name):
         list(api(cmd="/system/script/run", **{".id": match[".id"]}))
 
 
-def push_to_router(router, ingest_base_url, metrics_templates, firmware_tpl, sftp_config, syslog_config):
+def push_to_router(
+    router, ingest_base_url, metrics_templates, firmware_tpl, sftp_config, syslog_config,
+    baseline_templates=None, radius_config=None, gmedia_cidrs=None,
+):
     """
     router: dict with identity_name, mgmt_host, mgmt_port, admin_user,
     admin_password, auth_token, wan_interface. Raises on any failure —
@@ -202,6 +228,18 @@ def push_to_router(router, ingest_base_url, metrics_templates, firmware_tpl, sft
 
     syslog_config: {"host": ..., "port": ...} for the remote syslog
     target (syslog-forwarder/) -- see upsert_syslog_forwarding.
+
+    baseline_templates: {"v7": ..., "v6": ...} for the baseline-hardening
+    script (see qoe-baseline-hardening-v7/v6.rsc) -- optional so existing
+    callers that haven't been updated yet don't break; baseline push is
+    skipped entirely when not provided.
+
+    radius_config: {"secret1": ..., "secret2": ...} for the two fixed
+    fleet-wide RADIUS servers the baseline script wires up.
+
+    gmedia_cidrs: list of CIDR strings for the gmedia-all-ip allowlist
+    (same list as .env's SFTP_ALLOWED_CIDRS -- see qoe-baseline-hardening
+    header comment for why this is reused rather than tracked separately).
 
     Returns the router's actual /system identity name on success. Callers
     should write this back into routers.identity_name if it differs from
@@ -251,10 +289,29 @@ def push_to_router(router, ingest_base_url, metrics_templates, firmware_tpl, sft
         upsert_scheduler(api, "qoe-push-metrics", "qoe-push-metrics", "00:05:00")
         upsert_scheduler(api, "qoe-push-firmware", "qoe-push-firmware", "1d")
         upsert_syslog_forwarding(api, syslog_config["host"], syslog_config["port"])
+
+        if baseline_templates is not None:
+            baseline_tpl = baseline_templates["v7"] if major_version >= 7 else baseline_templates["v6"]
+            baseline_src = render_script(baseline_tpl, {
+                '"RADIUS_SECRET_1_PLACEHOLDER"': f'"{radius_config["secret1"]}"',
+                '"RADIUS_SECRET_2_PLACEHOLDER"': f'"{radius_config["secret2"]}"',
+                "{GMEDIA_CIDR_ARRAY_PLACEHOLDER}": build_ros_array_literal(gmedia_cidrs),
+            })
+            upsert_script(api, "qoe-baseline-hardening", baseline_src)
+            upsert_scheduler(api, "qoe-baseline-hardening", "qoe-baseline-hardening", "1d")
+
         # Best-effort -- the scheduled cycle will still deliver data on its
         # own even if this immediate kick fails (e.g. a slow/flaky router
         # timing out on the run command), so don't let that failure make
         # an otherwise-successful deploy look like it failed.
+        #
+        # Deliberately NOT auto-running qoe-baseline-hardening here, unlike
+        # the other two -- it touches firewall/management-port/RADIUS
+        # config, and firing it on every deploy (including a fleet-wide
+        # /deploy-all) would remove the "test on one router first, confirm
+        # reconnect" safety step. It waits for its own daily scheduler on
+        # first deploy; the initial rollout run is triggered explicitly and
+        # individually per pilot router during verification instead.
         try:
             run_script(api, "qoe-push-metrics")
             run_script(api, "qoe-push-firmware")
