@@ -1,11 +1,12 @@
 # qoe-push-metrics-v6.rsc -- for RouterOS v6 (at least the "long-term"
 # branch; confirmed on 6.49.8) where `/ping ... as-value` isn't recognized
 # by the script parser at all. That's a hard parse failure, not a runtime
-# one -- it kills the whole script, not just the ping block -- so this
-# variant drops structured ping capture entirely rather than risk the
-# uplink/resource/DHCP data failing to push too. Ping Latency & Loss will
-# show no data for routers deployed with this file. deploy_lib.py picks
-# this file automatically for major version 6 -- see routeros/README.md.
+# one -- it kills the whole script, not just the ping block. Structured
+# ping data comes from `/tool flood-ping`'s do-block instead (confirmed
+# working on 6.49.8 under scheduler execution) -- see the ping section
+# below for the details and its two deliberate differences from the v7
+# block. deploy_lib.py picks this file automatically for major version 6
+# -- see routeros/README.md.
 #
 # Runs every ~5 minutes via /system scheduler. Pushes interface counters,
 # resource usage, and DHCP pool utilization to the central ingestion API.
@@ -97,8 +98,68 @@
     :set coresJson ($coresJson . "{\"core\":\"$coreName\",\"load_pct\":$coreLoad}")
 }
 
-# --- Ping targets: intentionally empty on this build -- see header ---
+# --- Ping targets (v6: /tool flood-ping, NOT /ping as-value) ---
+# `/ping ... as-value` is a hard parse failure on this RouterOS branch
+# (see header), and even bare [/ping ...] only returns a received-packet
+# count -- loss but never latency. flood-ping's do-block DOES expose
+# min-rtt/avg-rtt/max-rtt/sent/received on v6 (confirmed live on
+# 6.49.8), with the same caveat as v7's as-value: real values only when
+# the script is fired by /system scheduler; an API/manual run gets
+# nothing and reports 100% loss until the next scheduled cycle.
+#
+# Two conscious differences vs the v7 block:
+#   - jitter_ms is (max - min) across the burst -- flood-ping gives no
+#     per-packet RTTs, so true consecutive-sample jitter isn't
+#     computable. A spread is a coarser proxy (reads slightly higher
+#     than v7's figure for the same link); fine for trending, just
+#     don't compare absolute jitter numbers across v6/v7 routers.
+#   - 10 packets per target instead of 5, sent back-to-back (flood-ping
+#     has no pacing) -- the larger sample makes the min/max spread a
+#     less noisy jitter proxy, and 40 packets total is negligible load.
+#
+# Targets and resolve-first behavior mirror the v7 block: fixed IPs
+# prove reachability, resolved domains prove DNS actually works, and
+# target_host reports the real IP pinged.
+:local googleComIp "google.com"
+:do { :set googleComIp [:resolve "google.com"] } on-error={ }
+:local facebookComIp "facebook.com"
+:do { :set facebookComIp [:resolve "facebook.com"] } on-error={ }
+
+:local pingTargetsName {"google-dns"; "cloudflare-dns"; "google.com"; "facebook.com"}
+:local pingTargetsHost {"8.8.8.8"; "1.1.1.1"; $googleComIp; $facebookComIp}
 :local pingsJson ""
+
+:for i from=0 to=([:len $pingTargetsName] - 1) do={
+    :local tName ($pingTargetsName->$i)
+    :local tHost ($pingTargetsHost->$i)
+
+    :local pMin 0
+    :local pAvg 0
+    :local pMax 0
+    :local pSent 0
+    :local pRecv 0
+    :do {
+        /tool flood-ping $tHost count=10 do={
+            :if ($sent = 10) do={
+                :set pMin $"min-rtt"
+                :set pAvg $"avg-rtt"
+                :set pMax $"max-rtt"
+                :set pSent $sent
+                :set pRecv $received
+            }
+        }
+    } on-error={ }
+
+    :local lossPct 100
+    :local jitterMs 0
+    :if ($pSent > 0) do={ :set lossPct (100 * ($pSent - $pRecv) / $pSent) }
+    :if ($pRecv > 0) do={ :set jitterMs ($pMax - $pMin) }
+
+    :if ($pingsJson != "") do={ :set pingsJson ($pingsJson . ",") }
+    :set pingsJson ($pingsJson . "{\"target_name\":\"$tName\",\"target_host\":\"$tHost\"," . \
+        "\"rtt_min_ms\":$pMin,\"rtt_avg_ms\":$pAvg,\"rtt_max_ms\":$pMax,\"packet_loss_pct\":$lossPct," . \
+        "\"jitter_ms\":$jitterMs}")
+}
 
 # --- DHCP pool utilization ---
 # `ranges` can hold multiple comma-separated entries, each either a

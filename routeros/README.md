@@ -4,7 +4,7 @@ Two scripts, two schedules — deliberately kept separate so the rarely-changing
 
 ## Install
 
-There are two metrics script variants — `qoe-push-metrics-v7.rsc` (RouterOS v7+, uses `/ping ... as-value` for real latency/loss numbers) and `qoe-push-metrics-v6.rsc` (RouterOS v6, no ping block — see "Two metrics script variants" below for why). `deploy_lib.py` (used by both admin-ui and `bulk_deploy.py`) auto-detects each router's actual RouterOS major version after connecting and pushes the matching one — you don't need to pick manually when deploying through those tools.
+There are two metrics script variants — `qoe-push-metrics-v7.rsc` (RouterOS v7+, uses `/ping ... as-value` for real latency/loss numbers) and `qoe-push-metrics-v6.rsc` (RouterOS v6, uses `/tool flood-ping` instead — see "Two metrics script variants" below for why). `deploy_lib.py` (used by both admin-ui and `bulk_deploy.py`) auto-detects each router's actual RouterOS major version after connecting and pushes the matching one — you don't need to pick manually when deploying through those tools.
 
 For a fully manual install instead:
 
@@ -21,9 +21,12 @@ For a fully manual install instead:
 
 ## Two metrics script variants (RouterOS v6 vs v7)
 
-`/ping ... as-value` (used to capture structured per-packet latency/loss) is confirmed working on RouterOS 7.20.4, but on at least one RouterOS 6.49.8 (long-term) box it isn't recognized by the script parser **at all** — not a runtime error, a hard parse failure, which kills the *entire* script (uplink/CPU/RAM/DHCP data included, not just the ping block). `qoe-push-metrics-v6.rsc` exists specifically to avoid that: it drops the ping block entirely rather than risk everything else failing to push too. Routers deployed with it will show no data in the "Ping Latency & Loss" panel — that's expected, not a bug, for that RouterOS branch.
+`/ping ... as-value` (used by the v7 script to capture structured per-packet latency/loss) is confirmed working on RouterOS 7.20.4, but on at least one RouterOS 6.49.8 (long-term) box it isn't recognized by the script parser **at all** — not a runtime error, a hard parse failure, which kills the *entire* script (uplink/CPU/RAM/DHCP data included, not just the ping block). `qoe-push-metrics-v6.rsc` exists specifically to avoid that.
 
-If you hit the same parse failure on a different v6 build, or find the working syntax for it, that's worth feeding back into `qoe-push-metrics-v6.rsc` rather than treating it as router-specific.
+The v6 variant gets its ping data from **`/tool flood-ping`'s `do={}` block** instead, which exposes `min-rtt`/`avg-rtt`/`max-rtt`/`sent`/`received` and parses fine on 6.49.8 (confirmed live; the other candidate — bracketed `[/ping ...]` as an expression — only ever returns a received-packet count, loss but no latency, so flood-ping won). Two caveats vs. the v7 numbers:
+
+- **Same scheduler-only quirk as v7's `as-value`**: real values only when the script is fired by `/system scheduler`; a manual/API-triggered run silently captures nothing and reports 100% loss until the next scheduled cycle. Don't debug "broken ping" from a manual run on either branch.
+- **v6 jitter is a min/max spread, not true jitter** — flood-ping doesn't expose per-packet RTTs, so `jitter_ms` there is (max − min) over a 10-packet burst rather than v7's mean consecutive-sample difference. Fine for trending; don't compare absolute jitter figures across v6/v7 routers.
 
 ## Test on one router first
 
