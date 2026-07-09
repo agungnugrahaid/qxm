@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 61,
+  "version": 62,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -585,7 +585,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 107
+        "y": 115
       },
       "fieldConfig": {
         "defaults": {
@@ -623,7 +623,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 107
+        "y": 115
       },
       "fieldConfig": {
         "defaults": {
@@ -661,7 +661,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 115
+        "y": 123
       },
       "fieldConfig": {
         "defaults": {},
@@ -1122,7 +1122,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 123
+        "y": 131
       },
       "fieldConfig": {
         "defaults": {},
@@ -1924,7 +1924,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 131
+        "y": 139
       },
       "fieldConfig": {
         "defaults": {},
@@ -1967,6 +1967,418 @@
           "refId": "A",
           "format": "table",
           "rawSql": "SELECT ap_name AS \"AP\", site_label AS \"Site\", model AS \"Model\", version AS \"Firmware\", num_sta AS \"Last Client Count\", time AS \"Last Report\", controller_url AS \"Controller URL\" FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name, COALESCE(s.site_desc, s.unifi_site_name) AS site_label, ai.model, ai.version, ai.num_sta, ai.state, ai.time, c.base_url || '/manage/site/' || s.unifi_site_name || '/devices' AS controller_url FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id JOIN controllers c ON c.id = s.controller_id WHERE s.customer_id = $customer_id AND ai.time > now() - interval '15 minutes' ORDER BY ai.ap_mac, ai.time DESC) latest WHERE state != 1 OR state IS NULL ORDER BY site_label, ap_name"
+        }
+      ]
+    },
+    {
+      "id": 129,
+      "type": "stat",
+      "title": "Wi-Fi Clients Connected",
+      "description": "Wireless clients seen in the last 15 minutes, across all this customer's sites/controllers.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 107
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT count(*) AS \"value\" FROM (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.is_wired, cm.satisfaction, cm.signal, cm.noise, cm.radio, cm.tx_rate FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC) latest WHERE is_wired = false"
+        }
+      ]
+    },
+    {
+      "id": 130,
+      "type": "stat",
+      "title": "Avg Satisfaction",
+      "description": "Mean of UniFi's own per-client experience score (0-100) over currently-connected wireless clients.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 107
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "green",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT round(avg(satisfaction)::numeric, 1) AS \"value\" FROM (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.is_wired, cm.satisfaction, cm.signal, cm.noise, cm.radio, cm.tx_rate FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC) latest WHERE is_wired = false AND satisfaction IS NOT NULL"
+        }
+      ]
+    },
+    {
+      "id": 131,
+      "type": "stat",
+      "title": "Avg SNR",
+      "description": "Mean signal-to-noise ratio across wireless clients -- the real link-quality number; good signal on a noisy channel still performs badly.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 107
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dB",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 15
+              },
+              {
+                "color": "green",
+                "value": 25
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT round(avg(signal - noise)::numeric, 1) AS \"value\" FROM (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.is_wired, cm.satisfaction, cm.signal, cm.noise, cm.radio, cm.tx_rate FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC) latest WHERE is_wired = false AND signal IS NOT NULL AND noise IS NOT NULL"
+        }
+      ]
+    },
+    {
+      "id": 132,
+      "type": "stat",
+      "title": "2.4GHz Client Share",
+      "description": "Share of wireless clients on 2.4GHz. A rising share means clients are falling off 5GHz (coverage gaps, band-steering misconfig, legacy devices) onto the slower, more congested band.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 107
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 40
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT round((100.0 * count(*) FILTER (WHERE radio = 'ng') / NULLIF(count(*), 0))::numeric, 1) AS \"value\" FROM (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.is_wired, cm.satisfaction, cm.signal, cm.noise, cm.radio, cm.tx_rate FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC) latest WHERE is_wired = false AND radio IS NOT NULL"
+        }
+      ]
+    },
+    {
+      "id": 133,
+      "type": "stat",
+      "title": "Peak Channel Util 2.4G",
+      "description": "Highest 2.4GHz airtime utilization on any single AP radio right now -- congestion at the radio level, before it shows up as retries.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 111
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT max(channel_util_2g) AS \"value\" FROM (SELECT DISTINCT ON (ai.ap_mac) ai.channel_util_2g, ai.channel_util_5g FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id WHERE s.customer_id = $customer_id AND ai.time > now() - interval '15 minutes' ORDER BY ai.ap_mac, ai.time DESC) latest"
+        }
+      ]
+    },
+    {
+      "id": 134,
+      "type": "stat",
+      "title": "Peak Channel Util 5G",
+      "description": "Highest 5GHz airtime utilization on any single AP radio right now.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 111
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT max(channel_util_5g) AS \"value\" FROM (SELECT DISTINCT ON (ai.ap_mac) ai.channel_util_2g, ai.channel_util_5g FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id WHERE s.customer_id = $customer_id AND ai.time > now() - interval '15 minutes' ORDER BY ai.ap_mac, ai.time DESC) latest"
+        }
+      ]
+    },
+    {
+      "id": 135,
+      "type": "stat",
+      "title": "Low-Rate Clients",
+      "description": "Wireless clients negotiating a TX rate under 24 Mbps -- legacy or edge-of-coverage devices that consume disproportionate airtime and slow the whole AP down.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 111
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT count(*) AS \"value\" FROM (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.is_wired, cm.satisfaction, cm.signal, cm.noise, cm.radio, cm.tx_rate FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC) latest WHERE is_wired = false AND tx_rate > 0 AND tx_rate < 24000"
         }
       ]
     }
