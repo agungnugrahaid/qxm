@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 66,
+  "version": 67,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -735,7 +735,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT * FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name AS \"AP\", CASE WHEN ai.state = 1 THEN 'online' ELSE 'offline' END AS \"Status\", ai.satisfaction AS \"Satisfaction\", ai.num_sta AS \"Clients\", ai.model AS \"Model\", ai.version AS \"Firmware\", ai.cpu_pct AS \"CPU %\", ai.mem_pct AS \"Mem %\", ai.channel_util_2g AS \"2.4G Util\", ai.channel_util_5g AS \"5G Util\", c.base_url || '/manage/site/' || s.unifi_site_name || '/dashboard' AS \"Controller URL\", ai.time AS \"As of\" FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id JOIN controllers c ON c.id = s.controller_id WHERE s.customer_id = $customer_id ORDER BY ai.ap_mac, ai.time DESC) latest ORDER BY \"Status\", \"AP\""
+          "rawSql": "SELECT * FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name AS \"AP\", ai.ip AS \"IP\", CASE WHEN ai.state = 1 THEN 'online' ELSE 'offline' END AS \"Status\", ai.satisfaction AS \"Satisfaction\", ai.num_sta AS \"Clients\", ai.model AS \"Model\", ai.version AS \"Firmware\", ai.cpu_pct AS \"CPU %\", ai.mem_pct AS \"Mem %\", ai.channel_util_2g AS \"2.4G Util\", ai.channel_util_5g AS \"5G Util\", c.base_url || '/manage/site/' || s.unifi_site_name || '/dashboard' AS \"Controller URL\", ai.time AS \"As of\" FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id JOIN controllers c ON c.id = s.controller_id WHERE s.customer_id = $customer_id ORDER BY ai.ap_mac, ai.time DESC) latest ORDER BY \"Status\", \"AP\""
         }
       ]
     },
@@ -1979,7 +1979,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT ap_name AS \"AP\", site_label AS \"Site\", model AS \"Model\", version AS \"Firmware\", num_sta AS \"Last Client Count\", time AS \"Last Report\", controller_url AS \"Controller URL\" FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name, COALESCE(s.site_desc, s.unifi_site_name) AS site_label, ai.model, ai.version, ai.num_sta, ai.state, ai.time, c.base_url || '/manage/site/' || s.unifi_site_name || '/devices' AS controller_url FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id JOIN controllers c ON c.id = s.controller_id WHERE s.customer_id = $customer_id AND ai.time > now() - interval '15 minutes' ORDER BY ai.ap_mac, ai.time DESC) latest WHERE state != 1 OR state IS NULL ORDER BY site_label, ap_name"
+          "rawSql": "SELECT ap_name AS \"AP\", ip AS \"IP\", site_label AS \"Site\", model AS \"Model\", version AS \"Firmware\", num_sta AS \"Last Client Count\", time AS \"Last Report\", controller_url AS \"Controller URL\" FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name, COALESCE(s.site_desc, s.unifi_site_name) AS site_label, ai.ip, ai.model, ai.version, ai.num_sta, ai.state, ai.time, c.base_url || '/manage/site/' || s.unifi_site_name || '/devices' AS controller_url FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id JOIN controllers c ON c.id = s.controller_id WHERE s.customer_id = $customer_id AND ai.time > now() - interval '15 minutes' ORDER BY ai.ap_mac, ai.time DESC) latest WHERE state != 1 OR state IS NULL ORDER BY site_label, ap_name"
         }
       ]
     },

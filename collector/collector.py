@@ -198,6 +198,7 @@ async def poll_site_devices(session, ctrl, site_name, site_id, conn):
             dev.get("satisfaction"),
             dev.get("num_sta"),
             dev.get("uptime"),
+            dev.get("ip"),
         ))
 
     if rows:
@@ -205,8 +206,8 @@ async def poll_site_devices(session, ctrl, site_name, site_id, conn):
         cur.executemany(
             "INSERT INTO ap_inventory "
             "(time, site_id, ap_mac, ap_name, model, version, cpu_pct, mem_pct, channel_util_2g, channel_util_5g, "
-            "state, satisfaction, num_sta, uptime) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "state, satisfaction, num_sta, uptime, ip) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             rows,
         )
         conn.commit()

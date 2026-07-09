@@ -209,7 +209,10 @@ CREATE TABLE ap_inventory (
     state INT,
     satisfaction INT,
     num_sta INT,
-    uptime BIGINT
+    uptime BIGINT,
+    -- controller-reported AP IP -- for offline APs it lets NOC reach the
+    -- device directly to distinguish "dead" from "lost adoption".
+    ip TEXT
 );
 SELECT create_hypertable('ap_inventory', 'time');
 CREATE INDEX ON ap_inventory (site_id, time DESC);
