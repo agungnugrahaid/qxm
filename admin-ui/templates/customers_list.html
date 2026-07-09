@@ -3,9 +3,17 @@
   <h1>Customers</h1>
 
   <table>
-    <tr><th>Name</th><th>Address</th></tr>
+    <tr><th>Name</th><th>Address</th><th></th></tr>
     {% for c in customers %}
-    <tr><td>{{ c.name }}</td><td>{{ c.address or "—" }}</td></tr>
+    <tr>
+      <td>{{ c.name }}</td>
+      <td>{{ c.address or "—" }}</td>
+      <td>
+        <form class="inline" method="post" action="/customers/{{ c.id }}/share-dashboard">
+          <button class="btn" type="submit">Share Dashboard</button>
+        </form>
+      </td>
+    </tr>
     {% endfor %}
   </table>
 

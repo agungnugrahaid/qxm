@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 57,
+  "version": 60,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -570,7 +570,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 95
+        "y": 106
       }
     },
     {
@@ -585,7 +585,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 96
+        "y": 107
       },
       "fieldConfig": {
         "defaults": {
@@ -623,7 +623,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 96
+        "y": 107
       },
       "fieldConfig": {
         "defaults": {
@@ -661,7 +661,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 104
+        "y": 115
       },
       "fieldConfig": {
         "defaults": {},
@@ -760,7 +760,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 72
+        "y": 75
       },
       "repeat": "router",
       "repeatDirection": "v",
@@ -792,7 +792,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 88
+        "y": 99
       }
     },
     {
@@ -807,7 +807,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 89
+        "y": 100
       },
       "fieldConfig": {
         "defaults": {},
@@ -844,7 +844,7 @@
     {
       "id": 111,
       "type": "stat",
-      "title": "Conntrack Usage % (peak)",
+      "title": "Conntrack Usage %",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
@@ -1122,7 +1122,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 112
+        "y": 123
       },
       "fieldConfig": {
         "defaults": {},
@@ -1594,7 +1594,7 @@
     {
       "id": 122,
       "type": "stat",
-      "title": "CPU Load % (peak)",
+      "title": "CPU Load %",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
@@ -1708,7 +1708,7 @@
     {
       "id": 124,
       "type": "stat",
-      "title": "DHCP Pool Utilization % (peak)",
+      "title": "DHCP Pool Utilization %",
       "datasource": {
         "type": "postgres",
         "uid": "timescaledb"
@@ -1776,7 +1776,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 80
+        "y": 83
       },
       "options": {
         "showTime": true,
@@ -1799,6 +1799,110 @@
       ],
       "repeat": "router",
       "repeatDirection": "v"
+    },
+    {
+      "id": 126,
+      "type": "logs",
+      "title": "Admin Sessions - $router",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 91
+      },
+      "repeat": "router",
+      "repeatDirection": "v",
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": false,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "fontSize": "small",
+        "detailsMode": "sidebar",
+        "showControls": true,
+        "allowDownload": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{job=\"mikrotik_syslog\", host=\"${router:text}\"} |~ `(user \\S+ logged (in|out) from \\S+ via \\S+|login failure for user \\S+ from \\S+ via \\S+)`"
+        }
+      ]
+    },
+    {
+      "id": 127,
+      "type": "stat",
+      "title": "Failed Admin Logins (1h) - $router",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 72
+      },
+      "repeat": "router",
+      "repeatDirection": "v",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "View admin session log",
+              "url": "/d/customer-overview/customer-overview?viewPanel=126",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count_over_time({job=\"mikrotik_syslog\", host=\"${router:text}\"} |~ `login failure for user \\S+ from \\S+ via \\S+` [1h])",
+          "queryType": "instant"
+        }
+      ]
     }
   ]
 }

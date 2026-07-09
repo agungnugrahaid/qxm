@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Share dashboard — {{ customer.name }}</h1>
+  {% if result.ok %}
+    <p class="result-ok">Dashboard link generated, scoped to {{ customer.name }} only (opens via the normal Grafana login):</p>
+    <p><input type="text" value="{{ result.detail }}" readonly style="width: 100%; padding: 0.5rem;" onclick="this.select()"></p>
+    <p><a class="btn primary" href="{{ result.detail }}" target="_blank">Open link</a></p>
+  {% else %}
+    <p class="result-fail">FAILED — {{ result.detail }}</p>
+  {% endif %}
+  <p><a class="btn" href="/customers">Back to customers</a></p>
+{% endblock %}

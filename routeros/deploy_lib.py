@@ -69,13 +69,16 @@ def render_script(template, replacements):
     return out
 
 
+SCRIPT_POLICY = "ftp,policy,read,write,reboot,test"
+
+
 def upsert_script(api, name, source):
     existing = list(api(cmd="/system/script/print"))
     match = next((s for s in existing if s.get("name") == name), None)
     if match:
-        list(api(cmd="/system/script/set", **{".id": match[".id"], "source": source}))
+        list(api(cmd="/system/script/set", **{".id": match[".id"], "source": source, "policy": SCRIPT_POLICY}))
     else:
-        list(api(cmd="/system/script/add", name=name, source=source, policy="read,write,test"))
+        list(api(cmd="/system/script/add", name=name, source=source, policy=SCRIPT_POLICY))
 
 
 def upsert_scheduler(api, name, on_event, interval):

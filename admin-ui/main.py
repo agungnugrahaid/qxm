@@ -41,6 +41,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from dashboard_share import share_dashboard_for_customer
 from deploy_lib import load_templates, push_to_router
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -250,6 +251,25 @@ def create_customer(name: str = Form(...), address: str = Form("")):
     conn.commit()
     conn.close()
     return RedirectResponse("/customers", status_code=303)
+
+
+@app.post("/customers/{customer_id}/share-dashboard")
+def share_dashboard(request: Request, customer_id: int):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM customers WHERE id = %s", (customer_id,))
+    customer = cur.fetchone()
+    conn.close()
+
+    try:
+        url = share_dashboard_for_customer(customer_id, customer["name"])
+        result = {"ok": True, "detail": url}
+    except Exception as e:
+        result = {"ok": False, "detail": str(e)}
+
+    return templates.TemplateResponse(
+        "share_dashboard_result.html", {"request": request, "customer": customer, "result": result}
+    )
 
 
 @app.get("/sites")

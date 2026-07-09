@@ -64,6 +64,14 @@ services:
       SFTP_PASSWORD: ${SFTP_PASSWORD:-changeme}
       SYSLOG_HOST: ${SYSLOG_HOST:-monitor.yourisp.com}
       SYSLOG_PORT: ${SYSLOG_PORT:-1514}
+      GRAFANA_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GRAFANA_PUBLIC_URL: ${GRAFANA_PUBLIC_URL:-https://grafana.yourisp.com}
+    volumes:
+      # Read-only: source template for generating customer-locked
+      # dashboard clones (see dashboard_share.py). Generated dashboards
+      # are pushed to Grafana via its API, not written back to this
+      # folder, so admin-ui never needs write access here.
+      - ./grafana/provisioning/dashboards:/grafana-dashboards:ro
     depends_on:
       timescaledb:
         condition: service_healthy
