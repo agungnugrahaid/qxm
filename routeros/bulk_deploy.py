@@ -23,6 +23,7 @@ Requires: pip install librouteros psycopg2-binary
 
 import csv
 import os
+import re
 import secrets
 import sys
 
@@ -103,6 +104,27 @@ def ensure_router_row(pg_conn, row, new_token):
     }
 
 
+def warn_if_identity_has_spaces(identity):
+    """
+    A RouterOS identity containing whitespace silently breaks per-router
+    log correlation: BSD syslog's HOSTNAME field is whitespace-delimited
+    with no escaping (RFC 3164 -- RFC 5424 is the same), so an identity
+    like "1. Ro. Agregat" arrives at Loki as host="1." and never matches
+    the dashboard's host filter. Confirmed live on the first fleet router
+    named with spaces; the fix was renaming it. Warn, don't block --
+    everything except log correlation still works, and the real fix
+    (renaming) happens on the router, not in this CSV.
+    """
+    if identity and re.search(r"\s", identity):
+        print(
+            f"[{identity}] WARNING: identity contains whitespace -- syslog will "
+            f"truncate the hostname at the first space, so this router's logs "
+            f"won't show up on its customer dashboard. Rename the router's "
+            f"/system identity (no spaces) and redeploy to fix.",
+            file=sys.stderr,
+        )
+
+
 def main():
     metrics_templates, firmware_tpl, baseline_templates = load_templates()
     pg_conn = psycopg2.connect(DATABASE_URL)
@@ -112,6 +134,7 @@ def main():
         reader = csv.DictReader(f)
         for row in reader:
             identity_name = row.get("identity_name")
+            warn_if_identity_has_spaces(identity_name)
             try:
                 router = ensure_router_row(pg_conn, row, secrets.token_hex(24))
                 actual_identity = push_to_router(
@@ -119,6 +142,10 @@ def main():
                     baseline_templates=baseline_templates, radius_config=RADIUS_CONFIG, gmedia_cidrs=GMEDIA_CIDRS,
                 )
                 if actual_identity != router["identity_name"]:
+                    # The router's real identity (what deploy syncs back) is
+                    # what syslog actually sends -- a clean CSV name doesn't
+                    # help if the device itself is named with spaces.
+                    warn_if_identity_has_spaces(actual_identity)
                     cur = pg_conn.cursor()
                     cur.execute("UPDATE routers SET identity_name = %s WHERE id = %s", (actual_identity, router["id"]))
                     pg_conn.commit()
