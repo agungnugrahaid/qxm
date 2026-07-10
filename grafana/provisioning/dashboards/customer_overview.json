@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 67,
+  "version": 68,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -730,7 +730,11 @@
           }
         ]
       },
-      "options": {},
+      "options": {
+        "frozenColumns": {
+          "left": 2
+        }
+      },
       "targets": [
         {
           "refId": "A",
@@ -1344,7 +1348,11 @@
           }
         ]
       },
-      "options": {},
+      "options": {
+        "frozenColumns": {
+          "left": 4
+        }
+      },
       "targets": [
         {
           "refId": "A",
@@ -2456,7 +2464,11 @@
           }
         ]
       },
-      "options": {},
+      "options": {
+        "frozenColumns": {
+          "left": 3
+        }
+      },
       "targets": [
         {
           "refId": "A",
