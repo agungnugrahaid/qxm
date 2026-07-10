@@ -137,10 +137,12 @@ def main():
             warn_if_identity_has_spaces(identity_name)
             try:
                 router = ensure_router_row(pg_conn, row, secrets.token_hex(24))
-                actual_identity = push_to_router(
+                actual_identity, warnings = push_to_router(
                     router, INGEST_BASE_URL, metrics_templates, firmware_tpl, SFTP_CONFIG, SYSLOG_CONFIG,
                     baseline_templates=baseline_templates, radius_config=RADIUS_CONFIG, gmedia_cidrs=GMEDIA_CIDRS,
                 )
+                for w in warnings:
+                    print(f"[{identity_name}] WARNING: {w}", file=sys.stderr)
                 if actual_identity != router["identity_name"]:
                     # The router's real identity (what deploy syncs back) is
                     # what syslog actually sends -- a clean CSV name doesn't

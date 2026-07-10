@@ -241,14 +241,15 @@ def push_to_router(
     (same list as .env's SFTP_ALLOWED_CIDRS -- see qoe-baseline-hardening
     header comment for why this is reused rather than tracked separately).
 
-    Returns the router's actual /system identity name on success. Callers
-    should write this back into routers.identity_name if it differs from
-    what's on file -- admin-entered values can drift from the router's
-    real identity (confirmed in practice: two routers in this fleet had
-    been onboarded with a shortened/friendly name instead of the exact
-    RouterOS identity), and the Loki `host` label used for per-router log
-    correlation is always the router's *real* identity, not our record of
-    it.
+    Returns (actual_identity, warnings) on success. actual_identity is the
+    router's real /system identity name -- callers should write it back
+    into routers.identity_name if it differs from what's on file
+    (admin-entered values can drift from the router's real identity, and
+    the Loki `host` label used for per-router log correlation is always
+    the real identity, not our record of it). warnings is a list of
+    non-fatal misconfiguration strings (e.g. a wan_interface that doesn't
+    exist on the router) the caller should surface to whoever ran the
+    deploy.
     """
     token = router["auth_token"]
     wan_interface = router.get("wan_interface") or "ether1"
@@ -276,6 +277,29 @@ def push_to_router(
     )
     try:
         major_version = detect_major_version(api)
+
+        # The metrics script reads WAN counters by interface name and dies
+        # on the first read if the name doesn't exist -- while the firmware
+        # and hardening scripts (which never touch the WAN) keep working,
+        # so the failure mode is a router whose dailies look healthy but
+        # never reports a single metric. Confirmed in practice on a router
+        # onboarded with pppoe-out1 when the device only had pppoe-out2.
+        # Warn, don't abort: everything else about the deploy is still
+        # worth pushing, and the fix is correcting the router record.
+        warnings = []
+        iface_names = {i.get("name") for i in api(cmd="/interface/print")}
+        if wan_interface not in iface_names:
+            warnings.append(
+                f"wan_interface {wan_interface!r} does not exist on this router "
+                f"-- metrics will NOT be reported until it is corrected. "
+                f"Router has: {', '.join(sorted(n for n in iface_names if n))}"
+            )
+        if wan_interface_backup and wan_interface_backup not in iface_names:
+            warnings.append(
+                f"wan_interface_backup {wan_interface_backup!r} does not exist on this "
+                f"router -- metrics will NOT be reported until it is corrected"
+            )
+
         metrics_tpl = metrics_templates["v7"] if major_version >= 7 else metrics_templates["v6"]
         metrics_src = render_script(metrics_tpl, {
             '"https://monitor.yourisp.com/ingest"': f'"{ingest_base_url}/ingest"',
@@ -318,6 +342,6 @@ def push_to_router(
         except Exception:
             pass
 
-        return get_identity(api)
+        return get_identity(api), warnings
     finally:
         api.close()

@@ -225,12 +225,14 @@ def deploy_and_record(router):
     conn = get_conn()
     cur = conn.cursor()
     try:
-        actual_identity = push_to_router(
+        actual_identity, warnings = push_to_router(
             router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TPL, SFTP_CONFIG, SYSLOG_CONFIG,
             baseline_templates=BASELINE_TEMPLATES, radius_config=RADIUS_CONFIG, gmedia_cidrs=GMEDIA_CIDRS,
         )
         renamed_to = sync_identity_name(router["id"], router["identity_name"], actual_identity)
         detail = "deployed" if not renamed_to else f"deployed (identity_name synced: {router['identity_name']!r} -> {renamed_to!r})"
+        if warnings:
+            detail += " -- " + " | ".join(f"WARNING: {w}" for w in warnings)
         result = {"identity_name": renamed_to or router["identity_name"], "ok": True, "detail": detail}
     except Exception as e:
         result = {"identity_name": router["identity_name"], "ok": False, "detail": str(e)}
