@@ -43,6 +43,7 @@ import psycopg2
 import psycopg2.extras
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from dashboard_share import share_dashboard_for_customer, slugify
@@ -72,6 +73,9 @@ RADIUS_CONFIG = {
 GMEDIA_CIDRS = [c.strip() for c in os.environ.get("SFTP_ALLOWED_CIDRS", "").split(",") if c.strip()]
 
 app = FastAPI(title="QoE Fleet Admin")
+# Vendored assets (simple-datatables) -- served locally rather than from a
+# CDN so the admin UI has no external dependency at page load.
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 METRICS_TEMPLATES, FIRMWARE_TPL, BASELINE_TEMPLATES = load_templates()

@@ -26,9 +26,16 @@
     .diff-del { background: #fee2e2; color: #991b1b; }
     .diff-hunk { color: #6b7280; font-weight: 600; }
     .line-no { display: inline-block; width: 3.5rem; text-align: right; margin-right: 0.75rem; color: #9ca3af; user-select: none; }
+    /* Wide tables (Sites/Routers with datatables) benefit from more room */
+    body.wide { max-width: 1400px; }
+    /* Keep the datatable search/paging chrome aligned with our styling */
+    .datatable-input { width: auto; }
+    .datatable-selector { width: auto; }
   </style>
+  <link rel="stylesheet" href="/static/simple-datatables.css">
+  <script src="/static/simple-datatables.js"></script>
 </head>
-<body>
+<body class="{% block bodyclass %}{% endblock %}">
   <nav>
     <a href="/">Routers</a>
     <a href="/sites">Sites</a>
