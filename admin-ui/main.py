@@ -382,7 +382,7 @@ def list_sites(request: Request):
         FROM sites s
         LEFT JOIN controllers ctl ON ctl.id = s.controller_id
         LEFT JOIN customers c ON c.id = s.customer_id
-        ORDER BY ctl.name, s.unifi_site_name
+        ORDER BY (s.customer_id IS NULL), ctl.name, COALESCE(s.site_desc, s.unifi_site_name)
     """)
     sites = cur.fetchall()
     cur.execute("SELECT * FROM customers ORDER BY name")

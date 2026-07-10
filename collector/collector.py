@@ -236,20 +236,38 @@ async def poll_unifi_controller(ctrl, conn):
 
         controller_id = ensure_controller(conn, ctrl)
 
-        # Best-effort -- readable site names are a nice-to-have, not
-        # something that should block client/AP metric collection (the
-        # actual point of this poll cycle) if this call fails for any
-        # reason.
+        # --- Discovery: register EVERY site the controller reports, so
+        # they're all visible/assignable on admin-ui's Sites page. This is
+        # deliberately decoupled from collection (below): discovery is
+        # automatic, collection is opt-in via customer assignment.
+        # Best-effort -- a failure here shouldn't block metric collection
+        # for the already-known sites.
         try:
             site_descs = await fetch_site_descs(session, ctrl)
+            for site_name, desc in site_descs.items():
+                ensure_site(conn, controller_id, site_name, desc)
         except Exception as e:
-            print(f"[{ctrl['name']}] couldn't fetch site names — {e}")
+            print(f"[{ctrl['name']}] site discovery failed — {e}")
             site_descs = {}
+
+        # --- Collection: poll ONLY sites paired with a customer. The
+        # Sites page's assign form is the single on/off switch -- no
+        # per-site YAML edits (controllers.yaml's old `sites:` lists are
+        # ignored). Unassigning stops collection on the next cycle;
+        # history is kept.
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, unifi_site_name FROM sites "
+            "WHERE controller_id = %s AND customer_id IS NOT NULL",
+            (controller_id,),
+        )
+        collect_sites = cur.fetchall()
+        cur.close()
+        print(f"[{ctrl['name']}] {len(site_descs)} sites discovered, {len(collect_sites)} collecting")
 
         tasks = []
         site_labels = []
-        for site_name in ctrl["sites"]:
-            site_id = ensure_site(conn, controller_id, site_name, site_descs.get(site_name))
+        for site_id, site_name in collect_sites:
             tasks.append(poll_site(session, ctrl, site_name, site_id, conn))
             site_labels.append(f"{site_name} (clients)")
             tasks.append(poll_site_devices(session, ctrl, site_name, site_id, conn))
