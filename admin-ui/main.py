@@ -42,11 +42,12 @@ from datetime import datetime, timezone
 import psycopg2
 import psycopg2.extras
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from dashboard_share import share_dashboard_for_customer
+from dashboard_share import share_dashboard_for_customer, slugify
 from deploy_lib import load_templates, push_to_router
+from report_lib import generate_report
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 INGEST_BASE_URL = os.environ.get("INGEST_BASE_URL", "https://monitor.yourisp.com")
@@ -335,6 +336,39 @@ def share_dashboard(request: Request, customer_id: int):
     return templates.TemplateResponse(
         "share_dashboard_result.html", {"request": request, "customer": customer, "result": result}
     )
+
+
+@app.get("/customers/{customer_id}/report")
+def download_report(customer_id: int, days: int = 30):
+    """
+    Generates the customer's QoE PDF on demand. Synchronous by design --
+    ~6 panel renders at 1-3s each is an acceptable wait for a click, and
+    the browser shows its own loading state.
+    """
+    customer_name, pdf_bytes = generate_report(customer_id, days=days)
+    filename = f"qoe-report-{slugify(customer_name)}-{datetime.now(timezone.utc).strftime('%Y%m%d')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/customers/{customer_id}/report-email")
+def set_report_email(customer_id: int, report_email: str = Form("")):
+    """
+    Sets/clears the address the monthly reporter emails this customer's
+    PDF to. Blank = don't email (the reporter skips those customers).
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE customers SET report_email = %s WHERE id = %s",
+        (report_email.strip() or None, customer_id),
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse("/customers", status_code=303)
 
 
 @app.get("/sites")

@@ -150,12 +150,58 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GF_SECURITY_DISABLE_BRUTE_FORCE_LOGIN_PROTECTION: "true"
       DB_PASSWORD: ${DB_PASSWORD:-changeme}   # used by datasources.yml provisioning
+      # PNG rendering for the customer PDF reports (see reporting/) --
+      # Grafana OSS has no built-in PDF export, so panels are rendered to
+      # PNG via the renderer service and assembled into PDFs ourselves.
+      GF_RENDERING_SERVER_URL: http://renderer:8081/render
+      GF_RENDERING_CALLBACK_URL: http://grafana:3000/
+      # Grafana refuses to start the rendering service with the default
+      # token in production mode -- must match the renderer's AUTH_TOKEN.
+      GF_RENDERING_RENDERER_TOKEN: ${RENDERER_TOKEN:-changeme}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - timescaledb
       - loki
+    restart: unless-stopped
+
+  # Headless browser that turns Grafana panels into PNGs (used by the
+  # customer PDF reports). Internal-only -- nothing publishes its port.
+  renderer:
+    image: grafana/grafana-image-renderer:latest
+    environment:
+      AUTH_TOKEN: ${RENDERER_TOKEN:-changeme}
+    restart: unless-stopped
+
+  # Monthly customer QoE PDF emails (see reporting/reporter.py). The
+  # on-demand equivalent lives in admin-ui ("Download PDF report").
+  # Needs real SMTP_* values in .env before it can actually send.
+  reporter:
+    build:
+      context: .
+      dockerfile: reporting/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://qoe:${DB_PASSWORD:-changeme}@timescaledb:5432/qoe
+      GRAFANA_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GRAFANA_PUBLIC_URL: ${GRAFANA_PUBLIC_URL:-https://grafana.yourisp.com}
+      SMTP_HOST: ${SMTP_HOST:-changeme}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-changeme}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-changeme}
+      REPORT_FROM_ADDRESS: ${REPORT_FROM_ADDRESS:-reports@yourisp.com}
+    volumes:
+      # Source template for the customer-locked dashboard clones
+      # (dashboard_share.py) -- read-only, same mount admin-ui uses.
+      - ./grafana/provisioning/dashboards:/grafana-dashboards:ro
+      # Remembers which month's run already happened, so a container
+      # restart on the 1st doesn't re-email everyone.
+      - reporter_state:/state
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      grafana:
+        condition: service_started
     restart: unless-stopped
 
   caddy:
@@ -209,3 +255,4 @@ volumes:
   caddy_config:
   pg_backups:
   sftp_uploads:
+  reporter_state:

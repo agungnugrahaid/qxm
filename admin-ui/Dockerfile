@@ -13,5 +13,7 @@ COPY routeros/qoe-push-metrics-v6.rsc ./qoe-push-metrics-v6.rsc
 COPY routeros/qoe-push-firmware.rsc ./qoe-push-firmware.rsc
 COPY routeros/qoe-baseline-hardening-v7.rsc ./qoe-baseline-hardening-v7.rsc
 COPY routeros/qoe-baseline-hardening-v6.rsc ./qoe-baseline-hardening-v6.rsc
+# Shared PDF-report logic (also used by the reporter container).
+COPY reporting/report_lib.py ./report_lib.py
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8082"]

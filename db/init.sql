@@ -18,7 +18,10 @@ CREATE TABLE controllers (
 CREATE TABLE customers (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
-    address TEXT
+    address TEXT,
+    -- where the monthly reporter emails this customer's QoE PDF
+    -- (see reporting/) -- NULL means don't email.
+    report_email TEXT
 );
 
 CREATE TABLE sites (
