@@ -397,6 +397,61 @@ def create_customer(name: str = Form(...), address: str = Form("")):
     return RedirectResponse("/customers", status_code=303)
 
 
+@app.get("/customers/{customer_id}/edit")
+def edit_customer_form(request: Request, customer_id: int):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM customers WHERE id = %s", (customer_id,))
+    customer = cur.fetchone()
+    conn.close()
+    if not customer:
+        return RedirectResponse("/customers", status_code=303)
+    return templates.TemplateResponse(
+        "customer_form.html", {"request": request, "customer": customer}
+    )
+
+
+@app.post("/customers/{customer_id}/edit")
+def update_customer(
+    customer_id: int,
+    name: str = Form(...),
+    address: str = Form(""),
+    report_email: str = Form(""),
+):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE customers SET name = %s, address = %s, report_email = %s WHERE id = %s",
+        (name.strip(), address.strip() or None, report_email.strip() or None, customer_id),
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse("/customers", status_code=303)
+
+
+@app.post("/customers/{customer_id}/delete")
+def delete_customer(customer_id: int):
+    conn = get_conn()
+    cur = conn.cursor()
+    
+    # Check for active routers
+    cur.execute("SELECT count(*) FROM routers WHERE customer_id = %s", (customer_id,))
+    router_count = cur.fetchone()[0]
+    
+    # Check for active sites
+    cur.execute("SELECT count(*) FROM sites WHERE customer_id = %s", (customer_id,))
+    site_count = cur.fetchone()[0]
+    
+    if router_count > 0 or site_count > 0:
+        conn.close()
+        return RedirectResponse("/customers?error=cannot_delete_active", status_code=303)
+        
+    cur.execute("DELETE FROM customers WHERE id = %s", (customer_id,))
+    conn.commit()
+    conn.close()
+    return RedirectResponse("/customers", status_code=303)
+
+
 @app.post("/customers/{customer_id}/share-dashboard")
 def share_dashboard(request: Request, customer_id: int):
     conn = get_conn()
