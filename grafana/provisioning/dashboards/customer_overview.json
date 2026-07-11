@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 71,
+  "version": 72,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -609,9 +609,10 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT time_bucket_gapfill('5 minutes', cm.time, $__timeFrom()::timestamptz, $__timeTo()::timestamptz) AS \"time\", count(DISTINCT cm.client_mac) AS \"clients\" FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND $__timeFilter(cm.time) GROUP BY 1 ORDER BY 1"
+          "rawSql": "SELECT gs AS \"time\", (SELECT count(DISTINCT cm.client_mac) FROM client_metrics cm JOIN sites s ON s.id = cm.site_id WHERE s.customer_id = $customer_id AND cm.time > gs - interval '15 minutes' AND cm.time <= gs) AS \"clients\" FROM generate_series($__timeFrom()::timestamptz, $__timeTo()::timestamptz, interval '5 minutes') AS gs ORDER BY 1"
         }
-      ]
+      ],
+      "description": "Distinct wireless+wired clients seen in a trailing 15-minute window, stepped every 5 minutes. The trailing window (>= the slowest collector cadence) keeps the line smooth when a customer mixes controllers polled at different rates -- e.g. UniFi every 5 min and Ruijie every 15 min -- instead of the count dipping on the minutes Ruijie didn't report."
     },
     {
       "id": 7,
