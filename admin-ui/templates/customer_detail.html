@@ -38,10 +38,16 @@
 
   <!-- Connected Routers -->
   <div class="card" style="margin-bottom: 1.5rem;">
-    <h2 style="font-size: 1.25rem; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem;">
-      <i data-lucide="router" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--primary);"></i>
-      Connected Routers ({{ routers|length }})
-    </h2>
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem;">
+      <h2 style="font-size: 1.25rem; margin: 0; display: flex; align-items: center;">
+        <i data-lucide="router" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--primary);"></i>
+        Connected Routers ({{ routers|length }})
+      </h2>
+      <a class="btn primary" href="/routers/new?customer_id={{ customer.id }}" style="height:32px; font-size:0.8rem;">
+        <i data-lucide="plus" style="width:14px; height:14px;"></i>
+        Add Router
+      </a>
+    </div>
     {% if routers %}
       <table style="width: 100%;">
         <thead>
@@ -98,10 +104,104 @@
 
   <!-- Connected Sites -->
   <div class="card">
-    <h2 style="font-size: 1.25rem; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem;">
-      <i data-lucide="map-pin" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--primary);"></i>
-      Connected Sites ({{ sites|length }})
-    </h2>
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+      <h2 style="font-size: 1.25rem; margin: 0; display: flex; align-items: center;">
+        <i data-lucide="map-pin" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--primary);"></i>
+        Connected Sites ({{ sites|length }})
+      </h2>
+      {% if unassigned_sites %}
+        <div style="position: relative; display: inline-block;" id="searchable-site-picker">
+          <form method="post" action="/sites-placeholder" id="assign-site-form" style="display: flex; gap: 0.5rem; align-items: center; margin: 0;">
+            <div style="position: relative; width: 260px;">
+              <input type="text" id="site-search-input" placeholder="Search discovered site..." autocomplete="off" style="padding: 0.25rem 0.5rem; font-size: 0.8rem; height: 32px; width: 100%; border: 1px solid var(--outline-variant); border-radius: 4px;" required>
+              <input type="hidden" name="site_id" id="site-hidden-id">
+              <input type="hidden" name="customer_id" value="{{ customer.id }}">
+              
+              <!-- Dropdown Panel -->
+              <div id="site-dropdown-list" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: var(--surface); border: 1px solid var(--outline-variant); border-radius: 4px; max-height: 220px; overflow-y: auto; z-index: 1000; box-shadow: 0px 4px 12px rgba(0,0,0,0.15); margin-top: 2px;">
+                {% for s in unassigned_sites %}
+                  <div class="dropdown-item" data-value="{{ s.id }}" data-search="{{ s.site_desc|lower }} {{ s.controller_name|lower }}" style="padding: 0.5rem 0.75rem; font-size: 0.8rem; cursor: pointer; border-bottom: 1px solid var(--outline-variant); line-height: 1.3;" onmouseover="this.style.background='var(--surface-container-low)'" onmouseout="this.style.background='none'">
+                    <strong>{{ s.site_desc }}</strong><br>
+                    <small style="color: var(--on-surface-variant)">{{ s.controller_name }}</small>
+                  </div>
+                {% endfor %}
+                <div id="no-results-msg" style="display: none; padding: 0.5rem 0.75rem; font-size: 0.8rem; color: var(--outline); text-align: center;">No matching sites found</div>
+              </div>
+            </div>
+            <button type="submit" class="btn primary" style="height: 32px; font-size: 0.8rem; white-space: nowrap;">
+              <i data-lucide="link" style="width:14px; height:14px;"></i> Link Site
+            </button>
+          </form>
+          
+          <script>
+            (function() {
+              var searchInput = document.getElementById('site-search-input');
+              var dropdownList = document.getElementById('site-dropdown-list');
+              var hiddenId = document.getElementById('site-hidden-id');
+              var items = dropdownList.getElementsByClassName('dropdown-item');
+              var noResults = document.getElementById('no-results-msg');
+              
+              // Open/Close dropdown
+              searchInput.addEventListener('focus', function() {
+                dropdownList.style.display = 'block';
+              });
+              
+              document.addEventListener('click', function(e) {
+                if (!document.getElementById('searchable-site-picker').contains(e.target)) {
+                  dropdownList.style.display = 'none';
+                }
+              });
+              
+              // Filter logic
+              searchInput.addEventListener('input', function() {
+                var query = this.value.toLowerCase();
+                var visibleCount = 0;
+                hiddenId.value = ''; // Reset selected ID while typing
+                
+                for (var i = 0; i < items.length; i++) {
+                  var item = items[i];
+                  var text = item.getAttribute('data-search');
+                  if (text.indexOf(query) > -1) {
+                    item.style.display = 'block';
+                    visibleCount++;
+                  } else {
+                    item.style.display = 'none';
+                  }
+                }
+                
+                noResults.style.display = visibleCount === 0 ? 'block' : 'none';
+                dropdownList.style.display = 'block';
+              });
+              
+              // Select item logic
+              for (var i = 0; i < items.length; i++) {
+                items[i].addEventListener('click', function() {
+                  var id = this.getAttribute('data-value');
+                  var label = this.getElementsByTagName('strong')[0].innerText;
+                  var controller = this.getElementsByTagName('small')[0].innerText;
+                  
+                  searchInput.value = label + ' (' + controller + ')';
+                  hiddenId.value = id;
+                  dropdownList.style.display = 'none';
+                });
+              }
+              
+              // Form submit rewrite
+              document.getElementById('assign-site-form').onsubmit = function(e) {
+                e.preventDefault();
+                var siteId = hiddenId.value;
+                if (!siteId) {
+                  alert('Please select a valid site from the dropdown options.');
+                  return false;
+                }
+                this.action = '/sites/' + siteId + '/assign?redirect_to=/customers/{{ customer.id }}';
+                this.submit();
+              };
+            })();
+          </script>
+        </div>
+      {% endif %}
+    </div>
     {% if sites %}
       <table style="width: 100%;">
         <thead>

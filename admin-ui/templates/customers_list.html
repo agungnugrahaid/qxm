@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block bodyclass %}wide{% endblock %}
 {% block section_name %}Admin{% endblock %}
 {% block page_title %}Customers{% endblock %}
 
@@ -22,13 +23,15 @@
 
   <!-- Customers List Card -->
   <div class="card">
-    <table id="customers-table">
+    <div class="datatable-container">
+      <table id="customers-table" style="width: 100%; table-layout: auto;">
       <thead>
         <tr>
-          <th style="width: 12%;">Name</th>
-          <th style="width: 13%;">Address</th>
-          <th style="width: 35%;">Report email</th>
-          <th style="width: 40%;">Actions</th>
+          <th>Name</th>
+          <th>Address</th>
+          <th style="text-align: center;">Connected</th>
+          <th>Report email</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -38,6 +41,17 @@
             <a href="/customers/{{ c.id }}" style="text-decoration: none; color: var(--primary); font-weight: 600;">{{ c.name }}</a>
           </td>
           <td>{{ c.address or "—" }}</td>
+          <td style="text-align: center;">
+            <div style="display: inline-flex; align-items: center; gap: 0.5rem; justify-content: center; background: var(--surface-variant); padding: 0.25rem 0.6rem; border-radius: 6px; font-size: 0.85rem; font-weight: 500;">
+              <span style="display: inline-flex; align-items: center; gap: 0.15rem;" title="Routers">
+                {{ c.router_count }} <i data-lucide="router" style="width:13px; height:13px; color: var(--secondary);"></i>
+              </span>
+              <span style="color: var(--on-surface-variant); font-size: 0.8rem;">/</span>
+              <span style="display: inline-flex; align-items: center; gap: 0.15rem;" title="Sites">
+                {{ c.site_count }} <i data-lucide="wifi" style="width:13px; height:13px; color: var(--success);"></i>
+              </span>
+            </div>
+          </td>
           <td>
             <form class="inline" method="post" action="/customers/{{ c.id }}/report-email" style="display:flex; gap:0.4rem; max-width: 320px;">
               <input name="report_email" type="email" placeholder="not emailed" value="{{ c.report_email or '' }}" style="width: 14rem; padding: 0.35rem 0.5rem; font-size:0.85rem;">
@@ -75,5 +89,6 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </div>
 {% endblock %}

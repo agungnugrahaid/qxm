@@ -15,7 +15,7 @@
           <label>Customer</label>
           <select name="customer_id" required>
             {% for c in customers %}
-              <option value="{{ c.id }}" {% if router and router.customer_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+              <option value="{{ c.id }}" {% if (router and router.customer_id == c.id) or (not router and request.query_params.get('customer_id')|int == c.id) %}selected{% endif %}>{{ c.name }}</option>
             {% endfor %}
           </select>
           <small><a href="/customers" style="color:var(--action-blue)">Manage customers</a></small>
