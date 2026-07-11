@@ -34,7 +34,9 @@
       <tbody>
         {% for c in customers %}
         <tr>
-          <td style="font-weight: 600; color: var(--primary);">{{ c.name }}</td>
+          <td style="font-weight: 600; color: var(--primary);">
+            <a href="/customers/{{ c.id }}" style="text-decoration: none; color: var(--primary); font-weight: 600;">{{ c.name }}</a>
+          </td>
           <td>{{ c.address or "—" }}</td>
           <td>
             <form class="inline" method="post" action="/customers/{{ c.id }}/report-email" style="display:flex; gap:0.4rem; max-width: 320px;">

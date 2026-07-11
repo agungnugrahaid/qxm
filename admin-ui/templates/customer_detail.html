@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block section_name %}Admin{% endblock %}
+{% block page_title %}Customer Details: {{ customer.name }}{% endblock %}
+
+{% block content %}
+  <div style="margin-bottom: 1.5rem; display: flex; gap: 0.75rem; justify-content: space-between; align-items: center;">
+    <a class="btn" href="/customers">
+      <i data-lucide="arrow-left" style="width:16px; height:16px;"></i>
+      Back to Customers
+    </a>
+    <a class="btn primary" href="/customers/{{ customer.id }}/edit">
+      <i data-lucide="edit-3" style="width:16px; height:16px;"></i>
+      Edit Profile
+    </a>
+  </div>
+
+  <!-- Customer Overview Card -->
+  <div class="card" style="margin-bottom: 1.5rem;">
+    <h2 style="font-size: 1.25rem; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem;">
+      <i data-lucide="user" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--primary);"></i>
+      Customer Profile
+    </h2>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+      <div>
+        <strong style="display: block; font-size: 0.85rem; color: var(--on-surface-variant);">Name</strong>
+        <span>{{ customer.name }}</span>
+      </div>
+      <div>
+        <strong style="display: block; font-size: 0.85rem; color: var(--on-surface-variant);">Address</strong>
+        <span>{{ customer.address or "—" }}</span>
+      </div>
+      <div>
+        <strong style="display: block; font-size: 0.85rem; color: var(--on-surface-variant);">Report Email</strong>
+        <span>{{ customer.report_email or "—" }}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connected Routers -->
+  <div class="card" style="margin-bottom: 1.5rem;">
+    <h2 style="font-size: 1.25rem; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem;">
+      <i data-lucide="router" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--primary);"></i>
+      Connected Routers ({{ routers|length }})
+    </h2>
+    {% if routers %}
+      <table style="width: 100%;">
+        <thead>
+          <tr>
+            <th>Identity</th>
+            <th>Mgmt Host</th>
+            <th>WAN Interface</th>
+            <th>Priority</th>
+            <th>Last Seen</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in routers %}
+          <tr>
+            <td style="font-weight: 600;">
+              {% if r.online %}
+                <span class="status-indicator online" style="display:inline-block; width:8px; height:8px; border-radius:50%; background-color:var(--success); margin-right:0.25rem;" title="Online"></span>
+              {% else %}
+                <span class="status-indicator offline" style="display:inline-block; width:8px; height:8px; border-radius:50%; background-color:var(--outline); margin-right:0.25rem;" title="Offline"></span>
+              {% endif %}
+              {{ r.identity_name }}
+            </td>
+            <td>{{ r.mgmt_host or "Behind NAT" }}</td>
+            <td>{{ r.wan_interface }}</td>
+            <td>
+              {% if r.priority == 'critical' %}
+                <span style="color: var(--terracotta); font-weight: 600;">critical</span>
+              {% else %}
+                <span>{{ r.priority }}</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if r.last_seen_at %}
+                {{ r.last_seen_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}
+              {% else %}
+                never
+              {% endif %}
+            </td>
+            <td>
+              <div style="display: flex; gap: 0.5rem;">
+                <a class="btn" href="/routers/{{ r.id }}/edit">Configure</a>
+                <a class="btn" href="/routers/{{ r.id }}/manual-script">Script</a>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p style="color: var(--on-surface-variant);">No routers connected to this customer profile.</p>
+    {% endif %}
+  </div>
+
+  <!-- Connected Sites -->
+  <div class="card">
+    <h2 style="font-size: 1.25rem; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem;">
+      <i data-lucide="map-pin" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--primary);"></i>
+      Connected Sites ({{ sites|length }})
+    </h2>
+    {% if sites %}
+      <table style="width: 100%;">
+        <thead>
+          <tr>
+            <th>Site Description</th>
+            <th>Internal ID</th>
+            <th>Controller</th>
+            <th>Discovered At</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in sites %}
+          <tr>
+            <td style="font-weight: 600; color: var(--primary);">{{ s.site_desc }}</td>
+            <td><code>{{ s.unifi_site_name }}</code></td>
+            <td>{{ s.controller_name }}</td>
+            <td>{{ s.discovered_at.strftime('%Y-%m-%d %H:%M:%S UTC') if s.discovered_at else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p style="color: var(--on-surface-variant);">No sites connected to this customer profile.</p>
+    {% endif %}
+  </div>
+{% endblock %}

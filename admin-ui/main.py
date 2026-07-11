@@ -514,6 +514,49 @@ def create_customer(
     return RedirectResponse("/customers", status_code=303)
 
 
+@app.get("/customers/{customer_id}")
+def show_customer_detail(request: Request, customer_id: int):
+    conn = get_conn()
+    cur = conn.cursor()
+    
+    # Get Customer info
+    cur.execute("SELECT * FROM customers WHERE id = %s", (customer_id,))
+    customer = cur.fetchone()
+    if not customer:
+        conn.close()
+        return RedirectResponse("/customers", status_code=303)
+        
+    # Get Customer Routers
+    cur.execute("SELECT * FROM routers WHERE customer_id = %s ORDER BY identity_name", (customer_id,))
+    routers = cur.fetchall()
+    
+    # Populate online flag on routers
+    for r in routers:
+        r["online"] = is_online(r["last_seen_at"])
+        
+    # Get Customer Sites joined with controller info
+    cur.execute("""
+        SELECT s.*, c.name AS controller_name 
+        FROM sites s 
+        LEFT JOIN controllers c ON c.id = s.controller_id 
+        WHERE s.customer_id = %s 
+        ORDER BY s.site_desc
+    """, (customer_id,))
+    sites = cur.fetchall()
+    
+    conn.close()
+    
+    return templates.TemplateResponse(
+        "customer_detail.html", 
+        {
+            "request": request, 
+            "customer": customer, 
+            "routers": routers, 
+            "sites": sites
+        }
+    )
+
+
 @app.get("/customers/{customer_id}/edit")
 def edit_customer_form(request: Request, customer_id: int):
     conn = get_conn()
