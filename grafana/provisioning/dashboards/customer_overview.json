@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 69,
+  "version": 71,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -732,14 +732,14 @@
       },
       "options": {
         "frozenColumns": {
-          "left": 2
+          "left": 3
         }
       },
       "targets": [
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT * FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name AS \"AP\", ai.ip AS \"IP\", CASE WHEN ai.state = 1 THEN 'online' ELSE 'offline' END AS \"Status\", ai.satisfaction AS \"Satisfaction\", ai.num_sta AS \"Clients\", ai.model AS \"Model\", ai.version AS \"Firmware\", ai.cpu_pct AS \"CPU %\", ai.mem_pct AS \"Mem %\", ai.channel_util_2g AS \"2.4G Util\", ai.channel_util_5g AS \"5G Util\", c.base_url || '/manage/site/' || s.unifi_site_name || '/dashboard' AS \"Controller URL\", ai.time AS \"As of\" FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id JOIN controllers c ON c.id = s.controller_id WHERE s.customer_id = $customer_id ORDER BY ai.ap_mac, ai.time DESC) latest ORDER BY \"Status\", \"AP\""
+          "rawSql": "SELECT * FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name AS \"AP\", c.name AS \"Controller\", ai.ip AS \"IP\", CASE WHEN ai.state = 1 THEN 'online' ELSE 'offline' END AS \"Status\", ai.satisfaction AS \"Satisfaction\", ai.num_sta AS \"Clients\", ai.model AS \"Model\", ai.version AS \"Firmware\", ai.cpu_pct AS \"CPU %\", ai.mem_pct AS \"Mem %\", ai.channel_util_2g AS \"2.4G Util\", ai.channel_util_5g AS \"5G Util\", c.base_url || '/manage/site/' || s.unifi_site_name || '/dashboard' AS \"Controller URL\", ai.time AS \"As of\" FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id JOIN controllers c ON c.id = s.controller_id WHERE s.customer_id = $customer_id ORDER BY ai.ap_mac, ai.time DESC) latest ORDER BY \"Status\", \"AP\""
         }
       ]
     },
@@ -1350,14 +1350,14 @@
       },
       "options": {
         "frozenColumns": {
-          "left": 4
+          "left": 5
         }
       },
       "targets": [
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "WITH latest AS (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.site_id, cm.ap_mac, ai.ap_name AS ap_name, cm.client_mac, cm.hostname, cm.ip, cm.essid, cm.signal, cm.noise, (cm.signal - cm.noise) AS snr, cm.satisfaction, 100.0 * cm.tx_retries / NULLIF(cm.wifi_tx_attempts, 0) AS retry_pct, cm.tx_rate / 1000 AS tx_rate_mbps, cm.channel, cm.time, ctrl.base_url || '/manage/site/' || s.unifi_site_name || '/dashboard' AS controller_url FROM client_metrics cm JOIN sites s ON s.id = cm.site_id JOIN controllers ctrl ON ctrl.id = s.controller_id LEFT JOIN LATERAL (SELECT ap_name FROM ap_inventory WHERE ap_mac = cm.ap_mac ORDER BY time DESC LIMIT 1) ai ON true WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC), problems AS (SELECT *, count(*) OVER (PARTITION BY ap_mac, channel) AS peers_on_same_channel FROM latest WHERE retry_pct > 20 OR satisfaction < 80 OR signal < -75) SELECT ap_name AS \"AP\", client_mac AS \"Client\", hostname AS \"Device\", ip AS \"IP\", essid AS \"SSID\", CASE WHEN peers_on_same_channel >= 3 THEN 'Channel congestion (' || peers_on_same_channel || ' affected)' WHEN snr < 15 THEN 'Weak signal / interference' WHEN snr >= 15 AND tx_rate_mbps IS NOT NULL AND tx_rate_mbps < 24 THEN 'Legacy device / rate issue' WHEN retry_pct > 20 THEN 'Elevated retries -- check UniFi UI' ELSE 'Unclear -- check UniFi UI' END AS \"Likely Cause\", signal AS \"Signal (dBm)\", noise AS \"Noise (dBm)\", snr AS \"SNR (dB)\", satisfaction AS \"Satisfaction\", round(retry_pct,1) AS \"Retry %\", tx_rate_mbps AS \"TX Rate (Mbps)\", channel AS \"Channel\", controller_url AS \"Controller URL\", time AS \"As of\" FROM problems ORDER BY retry_pct DESC NULLS LAST"
+          "rawSql": "WITH latest AS (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.site_id, cm.ap_mac, ai.ap_name AS ap_name, cm.client_mac, cm.hostname, cm.ip, cm.essid, cm.signal, cm.noise, (cm.signal - cm.noise) AS snr, cm.satisfaction, 100.0 * cm.tx_retries / NULLIF(cm.wifi_tx_attempts, 0) AS retry_pct, cm.tx_rate / 1000 AS tx_rate_mbps, cm.channel, cm.time, ctrl.name AS controller_name, ctrl.base_url || '/manage/site/' || s.unifi_site_name || '/dashboard' AS controller_url FROM client_metrics cm JOIN sites s ON s.id = cm.site_id JOIN controllers ctrl ON ctrl.id = s.controller_id LEFT JOIN LATERAL (SELECT ap_name FROM ap_inventory WHERE ap_mac = cm.ap_mac ORDER BY time DESC LIMIT 1) ai ON true WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' ORDER BY cm.site_id, cm.client_mac, cm.time DESC), problems AS (SELECT *, count(*) OVER (PARTITION BY ap_mac, channel) AS peers_on_same_channel FROM latest WHERE retry_pct > 20 OR satisfaction < 80 OR signal < -75) SELECT ap_name AS \"AP\", controller_name AS \"Controller\", client_mac AS \"Client\", hostname AS \"Device\", ip AS \"IP\", essid AS \"SSID\", CASE WHEN peers_on_same_channel >= 3 THEN 'Channel congestion (' || peers_on_same_channel || ' affected)' WHEN snr < 15 THEN 'Weak signal / interference' WHEN snr >= 15 AND tx_rate_mbps IS NOT NULL AND tx_rate_mbps < 24 THEN 'Legacy device / rate issue' WHEN retry_pct > 20 THEN 'Elevated retries -- check UniFi UI' ELSE 'Unclear -- check UniFi UI' END AS \"Likely Cause\", signal AS \"Signal (dBm)\", noise AS \"Noise (dBm)\", snr AS \"SNR (dB)\", satisfaction AS \"Satisfaction\", round(retry_pct,1) AS \"Retry %\", tx_rate_mbps AS \"TX Rate (Mbps)\", channel AS \"Channel\", controller_url AS \"Controller URL\", time AS \"As of\" FROM problems ORDER BY retry_pct DESC NULLS LAST"
         }
       ]
     },
