@@ -450,6 +450,7 @@ def get_manual_script(request: Request, router_id: int):
             "metrics_src_v6": metrics_src_v6,
             "firmware_src": firmware_src,
             "syslog_host": syslog_host,
+            "syslog_ip": syslog_ip,
             "syslog_port": syslog_port,
         },
     )
