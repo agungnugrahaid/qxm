@@ -2,7 +2,7 @@
   "title": "Customer Overview",
   "uid": "customer-overview",
   "schemaVersion": 39,
-  "version": 68,
+  "version": 69,
   "editable": true,
   "timezone": "browser",
   "refresh": "5m",
@@ -1987,7 +1987,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT ap_name AS \"AP\", ip AS \"IP\", site_label AS \"Site\", model AS \"Model\", version AS \"Firmware\", num_sta AS \"Last Client Count\", time AS \"Last Report\", controller_url AS \"Controller URL\" FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name, COALESCE(s.site_desc, s.unifi_site_name) AS site_label, ai.ip, ai.model, ai.version, ai.num_sta, ai.state, ai.time, c.base_url || '/manage/site/' || s.unifi_site_name || '/devices' AS controller_url FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id JOIN controllers c ON c.id = s.controller_id WHERE s.customer_id = $customer_id AND ai.time > now() - interval '15 minutes' ORDER BY ai.ap_mac, ai.time DESC) latest WHERE state != 1 OR state IS NULL ORDER BY site_label, ap_name"
+          "rawSql": "SELECT ap_name AS \"AP\", ip AS \"IP\", controller_name AS \"Controller\", model AS \"Model\", version AS \"Firmware\", num_sta AS \"Last Client Count\", time AS \"Last Report\", controller_url AS \"Controller URL\" FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name, c.name AS controller_name, ai.ip, ai.model, ai.version, ai.num_sta, ai.state, ai.time, c.base_url || '/manage/site/' || s.unifi_site_name || '/devices' AS controller_url FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id JOIN controllers c ON c.id = s.controller_id WHERE s.customer_id = $customer_id AND ai.time > now() - interval '15 minutes' ORDER BY ai.ap_mac, ai.time DESC) latest WHERE state != 1 OR state IS NULL ORDER BY controller_name, ap_name"
         }
       ]
     },
@@ -2473,7 +2473,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT hostname AS \"Device\", client_mac AS \"MAC\", ip AS \"IP\", ap_name AS \"AP\", site_label AS \"Site\", essid AS \"SSID\", CASE WHEN radio = 'ng' THEN '2.4GHz' WHEN radio = 'na' THEN '5GHz' ELSE radio END AS \"Band\", signal AS \"Signal (dBm)\", (signal - noise) AS \"SNR (dB)\", satisfaction AS \"Satisfaction\", tx_rate / 1000 AS \"TX Mbps\", rx_rate / 1000 AS \"RX Mbps\", controller_url AS \"Controller URL\", time AS \"As of\" FROM (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.hostname, cm.client_mac, cm.ip, cm.essid, cm.radio, cm.signal, cm.noise, cm.satisfaction, cm.tx_rate, cm.rx_rate, cm.time, COALESCE(s.site_desc, s.unifi_site_name) AS site_label, ctrl.base_url || '/manage/site/' || s.unifi_site_name || '/clients' AS controller_url, ai.ap_name FROM client_metrics cm JOIN sites s ON s.id = cm.site_id JOIN controllers ctrl ON ctrl.id = s.controller_id LEFT JOIN LATERAL (SELECT ap_name FROM ap_inventory WHERE ap_mac = cm.ap_mac ORDER BY time DESC LIMIT 1) ai ON true WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' AND cm.is_wired = false ORDER BY cm.site_id, cm.client_mac, cm.time DESC) latest ORDER BY \"Site\", \"AP\", \"Device\" NULLS LAST"
+          "rawSql": "SELECT hostname AS \"Device\", client_mac AS \"MAC\", ip AS \"IP\", ap_name AS \"AP\", controller_name AS \"Controller\", essid AS \"SSID\", CASE WHEN radio = 'ng' THEN '2.4GHz' WHEN radio = 'na' THEN '5GHz' ELSE radio END AS \"Band\", signal AS \"Signal (dBm)\", (signal - noise) AS \"SNR (dB)\", satisfaction AS \"Satisfaction\", tx_rate / 1000 AS \"TX Mbps\", rx_rate / 1000 AS \"RX Mbps\", controller_url AS \"Controller URL\", time AS \"As of\" FROM (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.hostname, cm.client_mac, cm.ip, cm.essid, cm.radio, cm.signal, cm.noise, cm.satisfaction, cm.tx_rate, cm.rx_rate, cm.time, ctrl.name AS controller_name, ctrl.base_url || '/manage/site/' || s.unifi_site_name || '/clients' AS controller_url, ai.ap_name FROM client_metrics cm JOIN sites s ON s.id = cm.site_id JOIN controllers ctrl ON ctrl.id = s.controller_id LEFT JOIN LATERAL (SELECT ap_name FROM ap_inventory WHERE ap_mac = cm.ap_mac ORDER BY time DESC LIMIT 1) ai ON true WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' AND cm.is_wired = false ORDER BY cm.site_id, cm.client_mac, cm.time DESC) latest ORDER BY \"Controller\", \"AP\", \"Device\" NULLS LAST"
         }
       ]
     }
