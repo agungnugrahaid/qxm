@@ -11,6 +11,7 @@
 poll_interval_seconds: 300
 
 controllers:
+  # UniFi controller (self-hosted). vendor defaults to "unifi".
   - name: pilot-controller-1
     base_url: "https://192.168.1.5:8443"   # your controller's URL
     is_unifi_os: false                       # true if this is a UDM/UDM Pro console
@@ -19,3 +20,16 @@ controllers:
                                               # what else is supported
     api_user: "api-readonly"
     api_password: "CHANGE_ME"
+
+  # Ruijie/Reyee Cloud (optional 2nd vendor). One entry for the whole cloud
+  # account; its BUILDING groups are discovered as sites. Rate-limited, so
+  # give it a slower poll_interval_seconds. Credentials come from the Ruijie
+  # Cloud Open Platform: api_user=App ID, api_password=Secret, api_token=the
+  # account-authorized API token (a distinct third value).
+  # - name: ruijie-cloud
+  #   vendor: ruijie
+  #   base_url: "https://cloud-as.ruijienetworks.com"   # your region's access URL
+  #   poll_interval_seconds: 900
+  #   api_user: "openXXXXXXXXXXXX"
+  #   api_password: "CHANGE_ME"
+  #   api_token: "CHANGE_ME"

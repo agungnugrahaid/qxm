@@ -16,16 +16,26 @@ revisit concurrency-across-controllers only if this fleet approaches
 ~15-20 controller instances.
 
 Multi-vendor: each controller row in controllers.yaml (and the `controllers`
-table) has a `vendor` field, defaulting to "unifi" for backward
-compatibility with existing config. poll_controller dispatches on it via
-CONTROLLER_POLLERS below -- adding a second vendor (e.g. Ruijie, once its
-API is actually available) means writing one new poll_<vendor>_controller
-function and registering it there, not restructuring poll_all/main_loop.
+table) has a `vendor` field, defaulting to "unifi". poll_controller
+dispatches on it via CONTROLLER_POLLERS below. Two vendors today:
+  - "unifi": self-hosted controllers, rich per-client wireless metrics.
+  - "ruijie": Ruijie/Reyee Cloud (cloud-as.ruijienetworks.com), a single
+    cloud "controller" whose BUILDING groups map to our sites. Exposes
+    per-client signal/band/channel/ssid/ip and per-AP status/channel-util,
+    but NOT satisfaction, noise (so no SNR), or per-client retry counters
+    -- those columns are left NULL and the corresponding dashboard cards
+    read n/a for Ruijie sites. Rate-limited (20/sec, 5000 calls/day), so
+    it runs on a slower per-controller poll interval (see poll_all).
+
+Adding a further vendor is "write one poll_<vendor>_controller and
+register it" -- no change to poll_all/main_loop.
 """
 
 import asyncio
+import base64
 import os
 import ssl
+import time
 from datetime import datetime, timezone
 
 import aiohttp
@@ -61,7 +71,7 @@ def ensure_controller(conn, ctrl):
         cur.execute(
             "INSERT INTO controllers (name, base_url, api_user, api_password, is_unifi_os, vendor) "
             "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-            (ctrl["name"], ctrl["base_url"], ctrl["api_user"], ctrl["api_password"], ctrl["is_unifi_os"], ctrl.get("vendor", "unifi")),
+            (ctrl["name"], ctrl["base_url"], ctrl["api_user"], ctrl["api_password"], ctrl.get("is_unifi_os", False), ctrl.get("vendor", "unifi")),
         )
         controller_id = cur.fetchone()[0]
     conn.commit()
@@ -279,15 +289,252 @@ async def poll_unifi_controller(ctrl, conn):
                 print(f"[{ctrl['name']}/{label}] error — {result}")
 
 
-# Dispatch table so a new vendor (e.g. Ruijie, once its API is actually in
-# hand) is "write one poll_<vendor>_controller function and add it here,"
-# not a restructure of poll_all/main_loop. Every entry must accept
-# (ctrl, conn) and follow the same contract poll_unifi_controller does:
-# raise on a controller-level failure (login, unreachable, etc.) so
+# ------------------------------------------------------------------------
+# Ruijie / Reyee Cloud (cloud-as.ruijienetworks.com)
+# ------------------------------------------------------------------------
+# One cloud "controller" (the API account); its BUILDING groups map to our
+# sites. Auth is a 3-part credential (app_id + secret + api_token) that
+# mints a 60-minute accessToken. Rate-limited (20/sec, 5000 calls/day), so
+# this runs on a slower per-controller interval and caches the token.
+# See the module docstring for the metric-coverage limitation.
+
+_RUIJIE_TOKENS = {}  # controller name -> (accessToken, expiry monotonic secs)
+# accessToken TTL is 60 min per docs; refresh a little early to avoid using
+# one that expires mid-cycle.
+_RUIJIE_TOKEN_TTL = 55 * 60
+
+
+def _ruijie_mac(dotted):
+    """Ruijie reports MACs dotted ("5416.5184.acef"); normalize to
+    colon-lowercase ("54:16:51:84:ac:ef") to match the UniFi rows so
+    per-AP joins and dedup behave uniformly."""
+    if not dotted:
+        return None
+    hexonly = dotted.replace(".", "").replace(":", "").lower()
+    if len(hexonly) != 12:
+        return dotted
+    return ":".join(hexonly[i:i + 2] for i in range(0, 12, 2))
+
+
+async def _ruijie_token(session, ctrl):
+    name = ctrl["name"]
+    cached = _RUIJIE_TOKENS.get(name)
+    if cached and time.monotonic() < cached[1]:
+        return cached[0]
+    url = f"{ctrl['base_url']}/service/api/oauth20/client/access_token"
+    async with session.post(
+        url,
+        params={"token": ctrl["api_token"]},
+        json={"appid": ctrl["api_user"], "secret": ctrl["api_password"]},
+        ssl=SSL_CTX,
+    ) as resp:
+        resp.raise_for_status()
+        data = await resp.json()
+    if data.get("code") != 0 or "accessToken" not in data:
+        raise RuntimeError(f"Ruijie auth failed: {data.get('code')} {data.get('msg')}")
+    token = data["accessToken"]
+    _RUIJIE_TOKENS[name] = (token, time.monotonic() + _RUIJIE_TOKEN_TTL)
+    return token
+
+
+async def _ruijie_get(session, ctrl, path, params, call_counter):
+    """GET a Ruijie API path with the access token, pacing to stay under
+    the 20/sec limit and counting calls for the daily-budget log line."""
+    call_counter[0] += 1
+    await asyncio.sleep(0.1)  # <=10 req/s, comfortably under the 20/s cap
+    url = f"{ctrl['base_url']}{path}"
+    async with session.get(url, params=params, ssl=SSL_CTX) as resp:
+        resp.raise_for_status()
+        return await resp.json()
+
+
+def _ruijie_walk_buildings(node, acc):
+    """Collect every BUILDING-type group from the group tree as
+    (groupId, name). BUILDING is Ruijie's site level (a customer venue);
+    ROOT/DEVICE levels are skipped."""
+    if isinstance(node, dict):
+        if node.get("type") == "BUILDING" and node.get("groupId"):
+            acc.append((node["groupId"], node.get("name") or str(node["groupId"])))
+        for v in node.values():
+            _ruijie_walk_buildings(v, acc)
+    elif isinstance(node, list):
+        for v in node:
+            _ruijie_walk_buildings(v, acc)
+
+
+def _ruijie_root_group_id(node):
+    """The ROOT-type group id -- passing it to the devices endpoint returns
+    every device across all buildings in one paginated sweep (confirmed
+    live), which is what keeps us under the daily call budget."""
+    if isinstance(node, dict):
+        if node.get("type") == "ROOT" and node.get("groupId"):
+            return node["groupId"]
+        for v in node.values():
+            found = _ruijie_root_group_id(v)
+            if found is not None:
+                return found
+    elif isinstance(node, list):
+        for v in node:
+            found = _ruijie_root_group_id(v)
+            if found is not None:
+                return found
+    return None
+
+
+async def poll_ruijie_controller(ctrl, conn):
+    call_counter = [0]
+    # Ruijie's self-signed-free cloud uses real TLS, but SSL_CTX (verify
+    # off) is fine and consistent with the rest of the collector.
+    async with aiohttp.ClientSession() as session:
+        token = await _ruijie_token(session, ctrl)
+        controller_id = ensure_controller(conn, ctrl)
+
+        # --- Discovery: every BUILDING group becomes a site.
+        tree = await _ruijie_get(
+            session, ctrl, "/service/api/group/single/tree",
+            {"depth": "DEVICE", "access_token": token}, call_counter,
+        )
+        tree_root = tree.get("groups", tree)
+        buildings = []
+        _ruijie_walk_buildings(tree_root, buildings)
+        for gid, name in buildings:
+            ensure_site(conn, controller_id, str(gid), name)
+        root_group_id = _ruijie_root_group_id(tree_root)
+
+        # --- Which buildings are customer-paired (collect only those).
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, unifi_site_name FROM sites "
+            "WHERE controller_id = %s AND customer_id IS NOT NULL",
+            (controller_id,),
+        )
+        paired = cur.fetchall()  # (site_id, groupId-as-str)
+        cur.close()
+        paired_gids = {gid for _, gid in paired}
+        site_id_by_gid = {gid: sid for sid, gid in paired}
+
+        if not paired:
+            print(f"[{ctrl['name']}] {len(buildings)} buildings discovered, 0 collecting "
+                  f"({call_counter[0]} API calls)")
+            return
+
+        now = datetime.now(timezone.utc)
+
+        # --- APs: one bulk paginated sweep at ROOT returns every device
+        # across all buildings; filter locally to paired ones. Also build
+        # a serial->mac map so clients (which reference their AP by serial)
+        # can be linked to an ap_mac.
+        serial_to_mac = {}
+        ap_rows_by_gid = {}
+        page = 1
+        while True:
+            devs = await _ruijie_get(
+                session, ctrl, "/service/api/maint/devices",
+                {"group_id": root_group_id, "page": page, "per_page": 100,
+                 "access_token": token},
+                call_counter,
+            )
+            device_list = devs.get("deviceList", [])
+            for d in device_list:
+                mac = _ruijie_mac(d.get("mac"))
+                if d.get("serialNumber"):
+                    serial_to_mac[d["serialNumber"]] = mac
+                if d.get("commonType") != "AP":
+                    continue
+                gid = str(d.get("buildingId") or d.get("groupId"))
+                if gid not in paired_gids:
+                    continue
+                ap_rows_by_gid.setdefault(gid, []).append((
+                    now, site_id_by_gid[gid], mac, d.get("aliasName") or d.get("name"),
+                    d.get("productClass"), d.get("softwareVersion"),
+                    None, None,  # cpu_pct, mem_pct -- not exposed
+                    d.get("radio1ChannelUtil"), d.get("radio2ChannelUtil"),
+                    1 if d.get("onlineStatus") == "ON" else 0,
+                    None,  # satisfaction -- not exposed
+                    d.get("staNums"),
+                    None,  # uptime -- not exposed
+                    d.get("localIp"),
+                ))
+            if len(device_list) < 100:
+                break
+            page += 1
+
+        ap_written = 0
+        cur = conn.cursor()
+        for gid, rows in ap_rows_by_gid.items():
+            cur.executemany(
+                "INSERT INTO ap_inventory "
+                "(time, site_id, ap_mac, ap_name, model, version, cpu_pct, mem_pct, "
+                "channel_util_2g, channel_util_5g, state, satisfaction, num_sta, uptime, ip) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                rows,
+            )
+            ap_written += len(rows)
+        conn.commit()
+        cur.close()
+
+        # --- Clients: per paired building (ROOT returns none for clients).
+        # satisfaction/noise/tx_retries/wifi_tx_attempts/tx_rate/rx_rate are
+        # not exposed by Ruijie -> NULL (those dashboard cards read n/a).
+        client_written = 0
+        for site_id, gid in paired:
+            rows = []
+            page_index = 1
+            while True:
+                data = await _ruijie_get(
+                    session, ctrl, "/service/api/open/v1/dev/user/current-user",
+                    {"group_id": gid, "page_index": page_index, "page_size": 200,
+                     "access_token": token},
+                    call_counter,
+                )
+                client_list = data.get("list", [])
+                for c in client_list:
+                    if c.get("connectType") != "wireless":
+                        continue
+                    band = c.get("band")
+                    radio = "ng" if band == "2.4G" else ("na" if band == "5G" else None)
+                    ap_mac = serial_to_mac.get(c.get("linkedDevice"))
+                    rows.append((
+                        now, site_id, _ruijie_mac(c.get("mac")), ap_mac,
+                        c.get("rssi"),  # signal
+                        None,  # satisfaction
+                        radio,
+                        None, None,  # tx_retries, wifi_tx_attempts
+                        None, None,  # tx_rate, rx_rate
+                        None,  # noise
+                        c.get("channel"), c.get("ssid"),
+                        False,  # is_wired
+                        c.get("userName"), c.get("ip"),
+                    ))
+                if len(client_list) < 200:
+                    break
+                page_index += 1
+            if rows:
+                cur = conn.cursor()
+                cur.executemany(
+                    "INSERT INTO client_metrics (time, site_id, client_mac, ap_mac, signal, "
+                    "satisfaction, radio, tx_retries, wifi_tx_attempts, tx_rate, rx_rate, "
+                    "noise, channel, essid, is_wired, hostname, ip) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    rows,
+                )
+                conn.commit()
+                cur.close()
+                client_written += len(rows)
+
+        print(f"[{ctrl['name']}] {len(buildings)} buildings discovered, {len(paired)} collecting "
+              f"-- {ap_written} APs, {client_written} clients ({call_counter[0]} API calls)")
+
+
+# Dispatch table so a new vendor is "write one poll_<vendor>_controller
+# function and add it here," not a restructure of poll_all/main_loop. Every
+# entry must accept (ctrl, conn) and follow the same contract the pollers
+# do: raise on a controller-level failure (auth, unreachable, etc.) so
 # poll_all's own try/except can log and move on to the next controller
 # without killing the whole cycle.
 CONTROLLER_POLLERS = {
     "unifi": poll_unifi_controller,
+    "ruijie": poll_ruijie_controller,
 }
 
 
@@ -299,17 +546,34 @@ async def poll_controller(ctrl, conn):
     await poller(ctrl, conn)
 
 
+# Last-poll monotonic timestamp per controller name, for per-controller
+# interval gating (a controller with its own poll_interval_seconds -- e.g.
+# a rate-limited Ruijie cloud on 900s -- shouldn't be hit every global
+# tick just because a UniFi controller wants 300s).
+_LAST_POLL = {}
+
+
 async def poll_all(config, conn):
+    global_interval = config.get("poll_interval_seconds", 300)
+    now = time.monotonic()
     for ctrl in config["controllers"]:
+        name = ctrl["name"]
+        interval = ctrl.get("poll_interval_seconds", global_interval)
+        last = _LAST_POLL.get(name)
+        if last is not None and (now - last) < interval:
+            continue  # not due yet on this controller's own cadence
+        _LAST_POLL[name] = now
         try:
             await poll_controller(ctrl, conn)
         except Exception as e:
-            print(f"[{ctrl['name']}] controller-level error — {e}")
+            print(f"[{name}] controller-level error — {e}")
 
 
 async def main_loop():
     config = load_config()
     conn = get_conn()
+    # The loop ticks at the global (minimum) interval; each controller is
+    # then gated to its own cadence inside poll_all.
     interval = config.get("poll_interval_seconds", 300)
 
     while True:
