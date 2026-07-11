@@ -34,6 +34,7 @@ Then follow `DEPLOY_NOW.md` for DNS, Caddy domains, and bringing the stack up. A
 - **[DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md)** — placeholders that need real values before this is actually live, including the SFTP firewall allowlist (`deploy/setup-sftp-firewall.sh`) — the SFTP port gets found and brute-forced within days if left open to the whole internet.
 - **[routeros/README.md](routeros/README.md)** — RouterOS-side details: the v6/v7 script split, `api-ssl` setup, DNS reachability check, DHCP pool math, and how the daily config snapshot gets pushed over SFTP.
 - **[LOGGING_AND_ALERTS.md](LOGGING_AND_ALERTS.md)** — Loki/Promtail setup and first alert rules.
+- **[admin-ui/DESIGN.md](admin-ui/DESIGN.md)** — the "Lumina Console" design system for the admin UI: the source-of-truth color tokens (`--primary`, `--on-surface-variant`, `--terracotta`, …) that `admin-ui/static/dashboard.css` and the templates reference. Read before adding UI pages so they stay visually consistent.
 - **[PRODUCTION_VM_SIZING.md](PRODUCTION_VM_SIZING.md)** — sizing guidance beyond pilot scale.
 
 ## Repo layout
