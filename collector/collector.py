@@ -309,6 +309,17 @@ _RUIJIE_TOKENS = {}  # controller name -> (accessToken, expiry monotonic secs)
 _RUIJIE_TOKEN_TTL = 55 * 60
 
 
+def _ruijie_int(v):
+    """Ruijie sends some numeric fields as strings that can be "" (e.g. a
+    client's `channel` before it's fully associated). Coerce to int, or
+    None if empty/non-numeric, so a bad value can't fail an integer-column
+    insert."""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _ruijie_mac(dotted):
     """Ruijie reports MACs dotted ("5416.5184.acef"); normalize to
     colon-lowercase ("54:16:51:84:ac:ef") to match the UniFi rows so
@@ -486,7 +497,7 @@ async def poll_ruijie_controller(ctrl, conn):
                         None, None,  # tx_retries, wifi_tx_attempts
                         None, None,  # tx_rate, rx_rate
                         None,  # noise
-                        c.get("channel"), c.get("ssid"),
+                        _ruijie_int(c.get("channel")), c.get("ssid"),
                         False,  # is_wired
                         c.get("userName"), c.get("ip"),
                     ))
@@ -551,6 +562,15 @@ async def poll_all(config, conn):
             await poll_controller(ctrl, conn)
         except Exception as e:
             print(f"[{name}] controller-level error — {e}")
+            # Critical: the shared connection may be left in an aborted
+            # transaction after a failed insert. Without this rollback, one
+            # bad row (e.g. a Ruijie client with an empty-string channel)
+            # poisons the connection and every subsequent controller -- and
+            # every subsequent cycle -- fails with "transaction is aborted".
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
 
 async def main_loop():
