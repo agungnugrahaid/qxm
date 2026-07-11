@@ -64,6 +64,7 @@ services:
       SFTP_PASSWORD: ${SFTP_PASSWORD:-changeme}
       SYSLOG_HOST: ${SYSLOG_HOST:-monitor.yourisp.com}
       SYSLOG_PORT: ${SYSLOG_PORT:-1514}
+      SYSLOG_IP: ${SYSLOG_IP:-}
       GRAFANA_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GRAFANA_PUBLIC_URL: ${GRAFANA_PUBLIC_URL:-https://grafana.yourisp.com}
       SFTP_ALLOWED_CIDRS: ${SFTP_ALLOWED_CIDRS:-}
