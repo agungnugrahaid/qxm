@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block section_name %}Admin{% endblock %}
+{% block page_title %}Add Customer{% endblock %}
+
+{% block content %}
+  <div style="margin-bottom: 1.5rem;">
+    <a class="btn" href="/customers">
+      <i data-lucide="arrow-left" style="width:16px; height:16px;"></i>
+      Back to Customers
+    </a>
+  </div>
+
+  <div class="card" style="max-width: 600px;">
+    <h2 style="font-size: 1.25rem; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem;">
+      <i data-lucide="user-plus" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--secondary);"></i>
+      New Customer Details
+    </h2>
+    <form method="post" action="/customers/new">
+      <div class="field">
+        <label>Name</label>
+        <input name="name" required placeholder="e.g. Acme Corp">
+      </div>
+      
+      <div class="field">
+        <label>Address</label>
+        <input name="address" placeholder="e.g. 123 Network Way">
+      </div>
+
+      <div class="field">
+        <label>Report email</label>
+        <input name="report_email" type="email" placeholder="e.g. alerts@acme.com">
+        <small style="color: var(--on-surface-variant); font-size: 0.8rem; display:block; margin-top: 0.25rem;">
+          The address monthly network reports are dispatched to. Leave empty to disable automated monthly email reporting.
+        </small>
+      </div>
+
+      <div style="margin-top: 1.5rem; display: flex; gap: 0.75rem;">
+        <button class="btn primary" type="submit">
+          <i data-lucide="plus" style="width:16px; height:16px;"></i>
+          Add Customer
+        </button>
+        <a class="btn" href="/customers">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock %}

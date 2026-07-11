@@ -491,11 +491,24 @@ def list_customers(request: Request):
     return templates.TemplateResponse("customers_list.html", {"request": request, "customers": customers})
 
 
+@app.get("/customers/new")
+def new_customer_form(request: Request):
+    return templates.TemplateResponse("customer_new.html", {"request": request})
+
+
 @app.post("/customers/new")
-def create_customer(name: str = Form(...), address: str = Form("")):
+def create_customer(
+    name: str = Form(...),
+    address: str = Form(""),
+    report_email: str = Form(None)
+):
+    report_email_clean = report_email.strip() if report_email else None
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("INSERT INTO customers (name, address) VALUES (%s, %s)", (name, address))
+    cur.execute(
+        "INSERT INTO customers (name, address, report_email) VALUES (%s, %s, %s)",
+        (name, address or None, report_email_clean)
+    )
     conn.commit()
     conn.close()
     return RedirectResponse("/customers", status_code=303)

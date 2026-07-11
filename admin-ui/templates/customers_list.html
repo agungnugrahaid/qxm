@@ -5,10 +5,20 @@
 {% block content %}
   {% if request.query_params.get("error") == "cannot_delete_active" %}
     <div class="info-notification warning" style="margin-bottom: 1.5rem; border-left: 4px solid var(--terracotta); background: #fee2e2; color: var(--terracotta);">
-      <i data-lucide="alert-triangle" style="width:16px; height:16px; display:inline-block; vertical-align:middle; margin-right:0.25rem;"></i>
+      <i data-lucide="alert-triangle" style="width:16px; height:16px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--terracotta);"></i>
       <strong>Cannot delete customer:</strong> This profile is currently assigned to active routers or sites. Please unassign them first before deleting.
     </div>
   {% endif %}
+
+  <!-- Actions Bar -->
+  <div class="card" style="margin-bottom: 1rem; padding: 1rem; display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; justify-content: space-between;">
+    <div>
+      <a class="btn primary" href="/customers/new">
+        <i data-lucide="plus" style="width:16px; height:16px;"></i>
+        Add Customer
+      </a>
+    </div>
+  </div>
 
   <!-- Customers List Card -->
   <div class="card">
@@ -63,27 +73,5 @@
         {% endfor %}
       </tbody>
     </table>
-  </div>
-
-  <!-- Add Customer Card -->
-  <div class="card" style="max-width: 600px;">
-    <h2 style="font-size: 1.25rem; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem;">
-      <i data-lucide="user-plus" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--secondary);"></i>
-      Add customer
-    </h2>
-    <form method="post" action="/customers/new">
-      <div class="field">
-        <label>Name</label>
-        <input name="name" required placeholder="e.g. Acme Corp">
-      </div>
-      <div class="field">
-        <label>Address</label>
-        <input name="address" placeholder="e.g. 123 Network Way">
-      </div>
-      <button class="btn primary" type="submit">
-        <i data-lucide="plus" style="width:16px; height:16px;"></i>
-        Add Customer
-      </button>
-    </form>
   </div>
 {% endblock %}
