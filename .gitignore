@@ -14,3 +14,6 @@ __pycache__/
 # Per-router credentials/config not meant for version control
 collector/controllers.yaml
 routeros/router_inventory.csv
+
+# Live reverse-proxy config -- real domains + basic-auth password hashes
+caddy/Caddyfile
