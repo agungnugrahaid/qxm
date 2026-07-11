@@ -1,72 +1,176 @@
 {% extends "base.html" %}
 {% block bodyclass %}wide{% endblock %}
-{% block content %}
-  <h1>Routers</h1>
-  <p>
-    <a class="btn primary" href="/routers/new">+ Add router</a>
-    <form class="inline" method="post" action="/deploy-all" onsubmit="return confirm('Push scripts to every router now? This runs in the background -- refresh this page to watch progress.');">
-      <button class="btn" type="submit">Deploy to all</button>
-    </form>
-    <form class="inline" method="post" action="/deploy-all" onsubmit="return confirm('Push scripts to routers marked Critical only? This runs in the background -- refresh this page to watch progress.');">
-      <input type="hidden" name="priority" value="critical">
-      <button class="btn" type="submit">Deploy critical only</button>
-    </form>
-  </p>
+{% block section_name %}Fleet{% endblock %}
+{% block page_title %}Routers{% endblock %}
 
-  <table id="routers-table">
-    <thead>
-      <tr>
-        <th>Identity</th>
-        <th>Customer</th>
-        <th>Mgmt host</th>
-        <th>Status</th>
-        <th>Priority</th>
-        <th>Last seen</th>
-        <th>Last deploy</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in routers %}
-      <tr>
-        <td>{{ r.identity_name }}</td>
-        <td>{{ r.customer_name or "—" }}</td>
-        <td>{{ r.mgmt_host }}:{{ r.mgmt_port }}</td>
-        <td>
-          {% if r.online %}
-            <span class="badge online">online</span>
-          {% else %}
-            <span class="badge offline">offline</span>
-          {% endif %}
-        </td>
-        <td>{% if r.priority == 'critical' %}<span class="badge offline">critical</span>{% else %}standard{% endif %}</td>
-        <td>{{ r.last_seen_at or "never" }}</td>
-        <td>
-          {% if r.last_deploy_status %}
-            <span class="{{ 'result-ok' if r.last_deploy_status == 'ok' else 'result-fail' }}">{{ r.last_deploy_status }}</span>
-            <small style="display:block;">{{ r.last_deploy_at }}</small>
-            <small style="display:block;">{{ r.last_deploy_detail }}</small>
-          {% else %}
-            never
-          {% endif %}
-        </td>
-        <td>
-          <a class="btn" href="/routers/{{ r.id }}/edit">Edit</a>
-          <a class="btn" href="/config-snapshots/{{ r.id }}">Config History</a>
-          <form class="inline" method="post" action="/routers/{{ r.id }}/deploy">
-            <button class="btn primary" type="submit">Deploy</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+{% block content %}
+  <script src="/static/server_table.js"></script>
+
+  <!-- Stats Grid -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-icon">
+        <i data-lucide="router"></i>
+      </div>
+      <div class="stat-info">
+        <span class="stat-label">Total Routers</span>
+        <span class="stat-val">{{ stats.total }}</span>
+      </div>
+    </div>
+    
+    <div class="stat-card">
+      <div class="stat-icon online">
+        <i data-lucide="wifi"></i>
+      </div>
+      <div class="stat-info">
+        <span class="stat-label">Online</span>
+        <span class="stat-val">{{ stats.online }}</span>
+      </div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-icon danger">
+        <i data-lucide="alert-triangle"></i>
+      </div>
+      <div class="stat-info">
+        <span class="stat-label">Critical priority</span>
+        <span class="stat-val">{{ stats.critical }}</span>
+      </div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-info" style="padding-left: 0.5rem;">
+        <span class="stat-label">Deploy Status</span>
+        <div style="display:flex; gap:0.75rem; align-items:center; margin-top:0.25rem;">
+          <span style="font-size:0.85rem; display:flex; align-items:center; gap:0.25rem; color:var(--success)">
+            <i data-lucide="check-circle" style="width:14px; height:14px;"></i> {{ stats.ok_deploy }} OK
+          </span>
+          <span style="font-size:0.85rem; display:flex; align-items:center; gap:0.25rem; color:var(--terracotta)">
+            <i data-lucide="x-circle" style="width:14px; height:14px;"></i> {{ stats.fail_deploy }} Failed
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Actions Bar -->
+  <div class="card" style="margin-bottom: 1rem; padding: 1rem; display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; justify-content: space-between;">
+    <div>
+      <a class="btn primary" href="/routers/new">
+        <i data-lucide="plus" style="width:16px; height:16px;"></i>
+        Add router
+      </a>
+    </div>
+    <div style="display:flex; gap:0.5rem; flex-wrap: wrap;">
+      <form class="inline" method="post" action="/deploy-all" onsubmit="return confirm('Push scripts to every router now? This runs in the background -- refresh this page to watch progress.');">
+        <button class="btn" type="submit">
+          <i data-lucide="play-all" style="width:16px; height:16px; color:var(--primary);"></i>
+          Deploy to all
+        </button>
+      </form>
+      <form class="inline" method="post" action="/deploy-all" onsubmit="return confirm('Push scripts to routers marked Critical only? This runs in the background -- refresh this page to watch progress.');">
+        <input type="hidden" name="priority" value="critical">
+        <button class="btn" type="submit">
+          <i data-lucide="alert-octagon" style="width:16px; height:16px; color:var(--terracotta);"></i>
+          Deploy critical only
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Table Card -->
+  <div class="card">
+    <table id="routers-table">
+      <thead>
+        <tr>
+          <th style="width: 15%;">Identity</th>
+          <th style="width: 12%;">Customer</th>
+          <th style="width: 14%;">Mgmt host</th>
+          <th style="width: 7%;">Status</th>
+          <th style="width: 8%;">Priority</th>
+          <th style="width: 10%;">Last seen</th>
+          <th style="width: 11%;">Last deploy</th>
+          <th style="width: 23%;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- Populated via AJAX -->
+      </tbody>
+    </table>
+  </div>
 
   <script>
-    new simpleDatatables.DataTable("#routers-table", {
-      perPage: 25,
-      perPageSelect: [10, 25, 50, 100],
-      columns: [{ select: 7, sortable: false, searchable: false }],
+    document.addEventListener("DOMContentLoaded", function() {
+      new ServerTable({
+        tableSelector: "#routers-table",
+        apiUrl: "/api/routers",
+        defaultSortCol: "identity_name",
+        defaultSortDir: "asc",
+        headers: [
+          "identity_name", // index 0
+          "customer_name", // index 1
+          "mgmt_host",     // index 2
+          "status",        // index 3
+          "priority",      // index 4
+          "last_seen",     // index 5
+          "last_deploy",   // index 6
+          null             // Actions column (not sortable)
+        ],
+        rowRenderer: function(r) {
+          const statusBadge = r.online 
+            ? '<span class="badge online">online</span>' 
+            : '<span class="badge offline">offline</span>';
+          
+          const priorityBadge = r.priority === 'critical' 
+            ? '<span class="badge offline">critical</span>' 
+            : '<span class="badge standard">standard</span>';
+
+          let deployStatus = '<span style="color:var(--on-surface-variant)">never</span>';
+          if (r.last_deploy_status) {
+            const deployClass = r.last_deploy_status === 'ok' ? 'result-ok' : 'result-fail';
+            const deployIcon = r.last_deploy_status === 'ok' ? 'check' : 'x';
+            const cleanDate = r.last_deploy_at ? r.last_deploy_at.substring(0, 19).replace('T', ' ') : '';
+            deployStatus = `
+              <span class="${deployClass}" style="display:inline-flex; align-items:center; gap:0.25rem;">
+                <i data-lucide="${deployIcon}" style="width:14px; height:14px;"></i>
+                ${r.last_deploy_status.toUpperCase()}
+              </span>
+              <small style="display:block; color:var(--on-surface-variant); font-size:0.75rem; margin-top:0.15rem;">${cleanDate}</small>
+              <small style="display:block; font-size:0.75rem; opacity:0.8; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${r.last_deploy_detail || ''}">${r.last_deploy_detail || ''}</small>
+            `;
+          }
+
+          const cleanLastSeen = r.last_seen_at ? r.last_seen_at.substring(0, 19).replace('T', ' ') : 'never';
+
+          return `
+            <td style="font-weight:600; color:var(--primary);">${r.identity_name}</td>
+            <td>${r.customer_name || '—'}</td>
+            <td style="font-family:ui-monospace, monospace; font-size:0.85rem;">${r.mgmt_host}:${r.mgmt_port}</td>
+            <td>${statusBadge}</td>
+            <td>${priorityBadge}</td>
+            <td style="font-size:0.85rem; color:var(--on-surface-variant);">${cleanLastSeen}</td>
+            <td>${deployStatus}</td>
+            <td>
+              <div class="inline-actions">
+                <a class="btn" href="/routers/${r.id}/edit" title="Edit settings">
+                  <i data-lucide="edit-3" style="width:14px; height:14px;"></i>
+                  <span class="btn-text">Edit</span>
+                </a>
+                <a class="btn" href="/config-snapshots/${r.id}" title="Configuration snapshot history">
+                  <i data-lucide="history" style="width:14px; height:14px;"></i>
+                  <span class="btn-text">History</span>
+                </a>
+                <form class="inline" method="post" action="/routers/${r.id}/deploy">
+                  <button class="btn primary" type="submit" title="Force deploy script now">
+                    <i data-lucide="play" style="width:14px; height:14px;"></i>
+                    <span class="btn-text">Deploy</span>
+                  </button>
+                </form>
+              </div>
+            </td>
+          `;
+        }
+      });
     });
   </script>
 {% endblock %}

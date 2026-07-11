@@ -1,10 +1,40 @@
 {% extends "base.html" %}
-{% block content %}
-  <h1>Config snapshot</h1>
-  <p>
-    <a class="btn" href="/config-snapshots/{{ router_id }}">Back to config history</a>
-    <a class="btn" href="/config-snapshots/{{ router_id }}/{{ timestamp }}">Download</a>
-  </p>
+{% block section_name %}Fleet{% endblock %}
+{% block page_title %}Config Snapshot &raquo; {{ timestamp }}{% endblock %}
 
-  <pre class="diff">{{ config_html | safe }}</pre>
+{% block content %}
+  <div style="margin-bottom: 1.5rem; display: flex; gap: 0.5rem;">
+    <a class="btn" href="/config-snapshots/{{ router_id }}">
+      <i data-lucide="arrow-left" style="width:16px; height:16px;"></i>
+      Back to History
+    </a>
+    <a class="btn" href="/config-snapshots/{{ router_id }}/{{ timestamp }}">
+      <i data-lucide="download" style="width:16px; height:16px;"></i>
+      Download Raw
+    </a>
+  </div>
+
+  <div class="card">
+    <pre class="diff" style="margin:0; background: var(--inverse-surface); color: var(--inverse-on-surface); border:none; max-height: calc(100vh - 280px); overflow: auto; font-size: 0.75rem; padding: 1rem; border-radius: 4px;">{{ config_html | safe }}</pre>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      const pre = document.querySelector('pre.diff');
+      if (pre) {
+        pre.setAttribute('tabindex', '0');
+        pre.style.outline = 'none'; // keep UI outline clean
+        pre.addEventListener('keydown', function(e) {
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+            e.preventDefault();
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(pre);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
+        });
+      }
+    });
+  </script>
 {% endblock %}

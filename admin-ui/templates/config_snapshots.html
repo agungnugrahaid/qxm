@@ -1,26 +1,55 @@
 {% extends "base.html" %}
-{% block content %}
-  <h1>Config history — {{ router.identity_name }}</h1>
-  <p><a class="btn" href="/">Back to routers</a></p>
+{% block section_name %}Fleet{% endblock %}
+{% block page_title %}Config History &raquo; {{ router.identity_name }}{% endblock %}
 
-  <table>
-    <tr>
-      <th>Captured</th>
-      <th>Size</th>
-      <th></th>
-    </tr>
-    {% for s in snapshots %}
-    <tr>
-      <td>{{ s.time }}</td>
-      <td>{{ s.size_bytes }} bytes</td>
-      <td>
-        <a class="btn" href="/config-snapshots/{{ router_id }}/{{ s.time.isoformat() }}/view">View</a>
-        <a class="btn" href="/config-snapshots/{{ router_id }}/{{ s.time.isoformat() }}">Download</a>
-        <a class="btn" href="/config-snapshots/{{ router_id }}/{{ s.time.isoformat() }}/diff">Diff vs previous</a>
-      </td>
-    </tr>
-    {% else %}
-    <tr><td colspan="3">No config snapshots yet — one lands after the daily firmware/config push runs (or click Deploy on this router to trigger it immediately).</td></tr>
-    {% endfor %}
-  </table>
+{% block content %}
+  <div style="margin-bottom: 1.5rem;">
+    <a class="btn" href="/">
+      <i data-lucide="arrow-left" style="width:16px; height:16px;"></i>
+      Back to Routers
+    </a>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Captured</th>
+          <th>Size</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in snapshots %}
+        <tr>
+          <td style="font-weight:600; color:var(--primary);">{{ s.time }}</td>
+          <td style="font-family:ui-monospace, monospace; font-size:0.85rem;">{{ s.size_bytes }} bytes</td>
+          <td>
+            <div class="inline-actions">
+              <a class="btn" href="/config-snapshots/{{ router_id }}/{{ s.time.isoformat() }}/view">
+                <i data-lucide="eye" style="width:14px; height:14px;"></i>
+                View
+              </a>
+              <a class="btn" href="/config-snapshots/{{ router_id }}/{{ s.time.isoformat() }}">
+                <i data-lucide="download" style="width:14px; height:14px;"></i>
+                Download
+              </a>
+              <a class="btn" href="/config-snapshots/{{ router_id }}/{{ s.time.isoformat() }}/diff">
+                <i data-lucide="git-pull-request" style="width:14px; height:14px;"></i>
+                Diff vs previous
+              </a>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="3" style="text-align: center; color: var(--on-surface-variant); padding: 2rem;">
+            <i data-lucide="history" style="width:32px; height:32px; margin-bottom: 0.5rem; opacity: 0.5; display: block; margin-left: auto; margin-right: auto;"></i>
+            No config snapshots yet — one lands after the daily firmware/config push runs (or click Deploy on this router to trigger it immediately).
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 {% endblock %}

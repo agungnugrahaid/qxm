@@ -1,85 +1,102 @@
 {% extends "base.html" %}
+{% block section_name %}Fleet{% endblock %}
+{% block page_title %}{{ "Edit" if router else "Add" }} Router{% endblock %}
+
 {% block content %}
-  <h1>{{ "Edit" if router else "Add" }} router</h1>
+  <div class="card" style="max-width: 800px;">
+    <form method="post" action="{{ '/routers/' ~ router.id ~ '/edit' if router else '/routers/new' }}">
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
+        <div class="field">
+          <label>Identity name</label>
+          <input name="identity_name" value="{{ router.identity_name if router else '' }}" required placeholder="Matches router's RouterOS identity">
+        </div>
 
-  <form method="post" action="{{ '/routers/' ~ router.id ~ '/edit' if router else '/routers/new' }}">
-    <div class="field">
-      <label>Identity name (must match the router's RouterOS identity)</label>
-      <input name="identity_name" value="{{ router.identity_name if router else '' }}" required>
-    </div>
+        <div class="field">
+          <label>Customer</label>
+          <select name="customer_id" required>
+            {% for c in customers %}
+              <option value="{{ c.id }}" {% if router and router.customer_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+          <small><a href="/customers" style="color:var(--action-blue)">Manage customers</a></small>
+        </div>
 
-    <div class="field">
-      <label>Customer</label>
-      <select name="customer_id" required>
-        {% for c in customers %}
-          <option value="{{ c.id }}" {% if router and router.customer_id == c.id %}selected{% endif %}>{{ c.name }}</option>
-        {% endfor %}
-      </select>
-      <small><a href="/customers">Manage customers</a></small>
-    </div>
+        <div class="field">
+          <label>Management host/IP</label>
+          <input name="mgmt_host" value="{{ router.mgmt_host if router else '' }}" required placeholder="e.g. 192.168.88.1">
+        </div>
 
-    <div class="field">
-      <label>Management host/IP</label>
-      <input name="mgmt_host" value="{{ router.mgmt_host if router else '' }}" required>
-    </div>
+        <div class="field">
+          <label>Management port</label>
+          <input name="mgmt_port" type="number" value="{{ router.mgmt_port if router else 8728 }}" required>
+        </div>
 
-    <div class="field">
-      <label>Management port</label>
-      <input name="mgmt_port" type="number" value="{{ router.mgmt_port if router else 8728 }}" required>
-    </div>
+        <div class="field">
+          <label>Admin username</label>
+          <input name="admin_user" value="{{ router.admin_user if router else '' }}" required>
+        </div>
 
-    <div class="field">
-      <label>Admin username</label>
-      <input name="admin_user" value="{{ router.admin_user if router else '' }}" required>
-    </div>
+        <div class="field">
+          <label>Admin password</label>
+          <input name="admin_password" type="password" value="{{ router.admin_password if router else '' }}" required>
+        </div>
 
-    <div class="field">
-      <label>Admin password</label>
-      <input name="admin_password" type="password" value="{{ router.admin_password if router else '' }}" required>
-    </div>
+        <div class="field">
+          <label>WAN/uplink interface</label>
+          <input name="wan_interface" value="{{ router.wan_interface if router else 'ether1' }}" required placeholder="e.g. ether1, pppoe-out1">
+        </div>
 
-    <div class="field">
-      <label>WAN/uplink interface (e.g. ether1, pppoe-out1)</label>
-      <input name="wan_interface" value="{{ router.wan_interface if router else 'ether1' }}" required>
-    </div>
+        <div class="field">
+          <label>Backup/failover WAN interface (optional)</label>
+          <input name="wan_interface_backup" value="{{ router.wan_interface_backup if router and router.wan_interface_backup else '' }}" placeholder="e.g. lte1">
+        </div>
+      </div>
 
-    <div class="field">
-      <label>Backup/failover uplink interface (optional -- leave blank if this router only has one WAN)</label>
-      <input name="wan_interface_backup" value="{{ router.wan_interface_backup if router and router.wan_interface_backup else '' }}">
-    </div>
+      <div class="field" style="margin-top: 0.5rem;">
+        <label>Rollout priority</label>
+        <select name="priority" style="max-width: 320px;">
+          <option value="standard" {% if not router or router.priority != 'critical' %}selected{% endif %}>Standard</option>
+          <option value="critical" {% if router and router.priority == 'critical' %}selected{% endif %}>Critical</option>
+        </select>
+        <small>Controls targeting for "Deploy critical only" rollout phase.</small>
+      </div>
 
-    <div class="field">
-      <label>Rollout priority</label>
-      <select name="priority">
-        <option value="standard" {% if not router or router.priority != 'critical' %}selected{% endif %}>Standard</option>
-        <option value="critical" {% if router and router.priority == 'critical' %}selected{% endif %}>Critical</option>
-      </select>
-      <small>Controls which routers "Deploy critical only" on the router list targets -- for phasing a large rollout.</small>
-    </div>
+      <div class="field" style="border-top: 1px solid var(--outline-variant); padding-top: 1.25rem; margin-top: 1.5rem;">
+        <label style="display:flex; align-items:center; font-weight: normal; cursor:pointer;">
+          <input type="checkbox" name="use_ssl" value="true" {% if router and router.use_ssl %}checked{% endif %}>
+          <span style="font-weight: 600;">Use api-ssl (TLS, usually port 8729) instead of plaintext api</span>
+        </label>
+        <small>Requires a certificate already assigned to the router's api-ssl service. Run the script below in RouterOS terminal first:</small>
 
-    <div class="field">
-      <label>
-        <input type="checkbox" name="use_ssl" value="true" style="width:auto" {% if router and router.use_ssl %}checked{% endif %}>
-        Use api-ssl (TLS, usually port 8729) instead of plaintext api
-      </label>
-      <small>Requires a certificate already assigned to the router's api-ssl service -- run the script below on the router's terminal first (see routeros/README.md for background).</small>
-
-      <div style="margin-top: 0.5rem;">
-        <pre id="api-ssl-script" class="diff" style="white-space: pre-wrap;">/certificate add name=api-ssl-cert common-name=REPLACE_ME key-usage=tls-server,key-cert-sign,crl-sign
+        <div style="margin-top: 0.75rem;">
+          <pre id="api-ssl-script" class="diff" style="white-space: pre-wrap; font-size: 0.8rem; background-color: var(--inverse-surface); color: var(--inverse-on-surface); border-color: var(--inverse-surface);">/certificate add name=api-ssl-cert common-name=REPLACE_ME key-usage=tls-server,key-cert-sign,crl-sign
 /certificate sign api-ssl-cert
 /ip service set api-ssl certificate=api-ssl-cert</pre>
-        <button type="button" class="btn" onclick="copyApiSslScript()">Copy script</button>
-        <small style="display:block; margin-top:0.35rem;">
-          Paste into the router's terminal (Winbox/SSH), then check "Use api-ssl" above and set the management port to 8729.
-          Once confirmed working, also disable the plaintext api service on the router (<code>/ip service disable api</code>) --
-          it's a real brute-force target if reachable from the internet.
-        </small>
+          
+          <button type="button" class="btn" onclick="copyApiSslScript()" style="margin-top:0.25rem;">
+            <i data-lucide="copy" style="width:14px; height:14px;"></i>
+            Copy script
+          </button>
+          
+          <small style="display:block; margin-top:0.5rem; line-height: 1.4;">
+            Paste this setup script into your router's terminal. Then check "Use api-ssl" above and set the management port to <strong>8729</strong>.
+            Once confirmed working, remember to disable plaintext api (<code>/ip service disable api</code>).
+          </small>
+        </div>
       </div>
-    </div>
 
-    <button class="btn primary" type="submit">Save</button>
-    <a class="btn" href="/">Cancel</a>
-  </form>
+      <div style="margin-top: 2rem; border-top: 1px solid var(--outline-variant); padding-top: 1.25rem; display:flex; gap:0.5rem;">
+        <button class="btn primary" type="submit">
+          <i data-lucide="save" style="width:16px; height:16px;"></i>
+          Save Router
+        </button>
+        <a class="btn" href="/">
+          <i data-lucide="x" style="width:16px; height:16px;"></i>
+          Cancel
+        </a>
+      </div>
+    </form>
+  </div>
 
   <script>
     (function () {
@@ -100,7 +117,9 @@
 
     function copyApiSslScript() {
       var text = document.getElementById('api-ssl-script').textContent;
-      navigator.clipboard.writeText(text);
+      navigator.clipboard.writeText(text).then(function() {
+        alert("Script copied to clipboard!");
+      });
     }
   </script>
 {% endblock %}

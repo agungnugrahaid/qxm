@@ -1,25 +1,70 @@
 {% extends "base.html" %}
+{% block section_name %}Fleet{% endblock %}
+{% block page_title %}Config Diff{% endblock %}
+
 {% block content %}
-  <h1>Config diff</h1>
-  <p>
-    <a class="btn" href="/config-snapshots/{{ router_id }}">Back to config history</a>
+  <div style="margin-bottom: 1.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+    <a class="btn" href="/config-snapshots/{{ router_id }}">
+      <i data-lucide="arrow-left" style="width:16px; height:16px;"></i>
+      Back to History
+    </a>
     {% if older_timestamp %}
-      <a class="btn" href="/config-snapshots/{{ router_id }}/{{ older_timestamp }}/diff">&larr; Older</a>
+      <a class="btn" href="/config-snapshots/{{ router_id }}/{{ older_timestamp }}/diff">
+        <i data-lucide="chevron-left" style="width:16px; height:16px;"></i>
+        Older
+      </a>
     {% else %}
-      <span class="btn" style="opacity: 0.4; cursor: default;">&larr; Older</span>
+      <span class="btn" style="opacity: 0.4; cursor: default;">
+        <i data-lucide="chevron-left" style="width:16px; height:16px;"></i>
+        Older
+      </span>
     {% endif %}
     {% if newer_timestamp %}
-      <a class="btn" href="/config-snapshots/{{ router_id }}/{{ newer_timestamp }}/diff">Newer &rarr;</a>
+      <a class="btn" href="/config-snapshots/{{ router_id }}/{{ newer_timestamp }}/diff">
+        Newer
+        <i data-lucide="chevron-right" style="width:16px; height:16px;"></i>
+      </a>
     {% else %}
-      <span class="btn" style="opacity: 0.4; cursor: default;">Newer &rarr;</span>
+      <span class="btn" style="opacity: 0.4; cursor: default;">
+        Newer
+        <i data-lucide="chevron-right" style="width:16px; height:16px;"></i>
+      </span>
     {% endif %}
-  </p>
+  </div>
 
-  {% if diff_html is none %}
-    <p>No earlier snapshot to compare against — this is the first one captured for this router.</p>
-  {% elif diff_html %}
-    <pre class="diff">{{ diff_html | safe }}</pre>
-  {% else %}
-    <p>No changes since the previous snapshot.</p>
-  {% endif %}
+  <div class="card">
+    {% if diff_html is none %}
+      <div style="text-align: center; padding: 2rem; color: var(--on-surface-variant);">
+        <i data-lucide="help-circle" style="width:32px; height:32px; margin-bottom: 0.5rem; opacity: 0.5;"></i>
+        <p style="margin:0;">No earlier snapshot to compare against — this is the first one captured for this router.</p>
+      </div>
+    {% elif diff_html %}
+      <pre class="diff" style="margin:0; background: var(--inverse-surface); color: var(--inverse-on-surface); border:none; max-height: calc(100vh - 280px); overflow: auto; font-size: 0.75rem; padding: 1rem; border-radius: 4px;">{{ diff_html | safe }}</pre>
+    {% else %}
+      <div style="text-align: center; padding: 2rem; color: var(--on-surface-variant);">
+        <i data-lucide="info" style="width:32px; height:32px; margin-bottom: 0.5rem; opacity: 0.5;"></i>
+        <p style="margin:0;">No changes since the previous snapshot.</p>
+      </div>
+    {% endif %}
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      const pre = document.querySelector('pre.diff');
+      if (pre) {
+        pre.setAttribute('tabindex', '0');
+        pre.style.outline = 'none'; // keep UI outline clean
+        pre.addEventListener('keydown', function(e) {
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+            e.preventDefault();
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(pre);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
+        });
+      }
+    });
+  </script>
 {% endblock %}

@@ -1,75 +1,138 @@
 {% extends "base.html" %}
 {% block bodyclass %}wide{% endblock %}
+{% block section_name %}Fleet{% endblock %}
+{% block page_title %}Sites{% endblock %}
+
 {% block content %}
-  <h1>Sites</h1>
-  <p style="color:#6b7280; font-size:0.9rem;">
+  <script src="/static/server_table.js"></script>
+
+  <!-- Stats Grid -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-icon">
+        <i data-lucide="map-pin"></i>
+      </div>
+      <div class="stat-info">
+        <span class="stat-label">Total Sites</span>
+        <span class="stat-val">{{ stats.total }}</span>
+      </div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-icon online">
+        <i data-lucide="activity"></i>
+      </div>
+      <div class="stat-info">
+        <span class="stat-label">Collecting</span>
+        <span class="stat-val">{{ stats.collecting }}</span>
+      </div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-icon warning">
+        <i data-lucide="pause-circle"></i>
+      </div>
+      <div class="stat-info">
+        <span class="stat-label">Not Collected</span>
+        <span class="stat-val">{{ stats.not_collected }}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="info-notification">
+    <i data-lucide="info" style="width:16px; height:16px; display:inline-block; vertical-align:middle; margin-right:0.25rem;"></i>
     Every site on every controller is discovered automatically. <strong>Assigning a customer is what
     starts data collection</strong> for a site (from the collector's next 5-minute cycle);
-    unassigned sites are visible here but not collected. Collected history is kept if a site
+    unassigned sites are visible here but not collected. Collected history is preserved if a site
     is later unassigned.
-  </p>
+  </div>
 
-  <table id="sites-table">
-    <thead>
-      <tr>
-        <th>Collecting</th>
-        <th>Controller</th>
-        <th>Site name</th>
-        <th>Discovered</th>
-        <th>Customer</th>
-        <th>Assign</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for s in sites %}
-      <tr>
-        <td>
-          {% if s.customer_id %}
-            <span class="badge online">collecting</span>
-          {% else %}
-            <span class="badge" style="background:#f3f4f6; color:#6b7280;">not collected</span>
-          {% endif %}
-        </td>
-        <td>{{ s.controller_name or "—" }}</td>
-        <td>
-          {{ s.site_desc or s.unifi_site_name }}
-          {% if s.site_desc %}<small style="display:block; color:#6b7280;">{{ s.unifi_site_name }}</small>{% endif %}
-        </td>
-        <td>{{ s.discovered_at.strftime("%Y-%m-%d") if s.discovered_at else "—" }}</td>
-        <td>
-          {% if s.customer_name %}
-            {{ s.customer_name }}
-          {% else %}
-            <span class="badge offline">unassigned</span>
-          {% endif %}
-        </td>
-        <td>
-          <form class="inline" method="post" action="/sites/{{ s.id }}/assign" style="display:flex; gap:0.4rem;">
-            <select name="customer_id" required>
-              <option value="" disabled {% if not s.customer_id %}selected{% endif %}>Choose customer…</option>
-              {% for c in customers %}
-                <option value="{{ c.id }}" {% if s.customer_id == c.id %}selected{% endif %}>{{ c.name }}</option>
-              {% endfor %}
-            </select>
-            <button class="btn primary" type="submit">Assign</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="card">
+    <table id="sites-table">
+      <thead>
+        <tr>
+          <th style="width: 12%;">Collecting</th>
+          <th style="width: 13%;">Controller</th>
+          <th style="width: 25%;">Site name</th>
+          <th style="width: 12%;">Discovered</th>
+          <th style="width: 15%;">Customer</th>
+          <th style="width: 23%;">Assign</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- Populated via AJAX -->
+      </tbody>
+    </table>
+  </div>
 
-  {% if not sites %}
-    <p>No sites discovered yet — the collector populates this once it's polled at least one controller.</p>
+  {% if not stats.total %}
+    <div class="card" style="text-align: center; color: var(--on-surface-variant); padding: 2rem;">
+      <i data-lucide="inbox" style="width:32px; height:32px; margin-bottom: 0.5rem; opacity: 0.5;"></i>
+      <p style="margin: 0;">No sites discovered yet — the collector populates this once it's polled at least one controller.</p>
+    </div>
   {% endif %}
 
   <script>
-    new simpleDatatables.DataTable("#sites-table", {
-      perPage: 25,
-      perPageSelect: [10, 25, 50, 100],
-      // Actions column: sorting/searching a column of identical forms is
-      // meaningless and slows the search index down.
-      columns: [{ select: 5, sortable: false, searchable: false }],
+    // Serialize customers list for select rendering
+    const customersList = {{ customers|tojson }};
+
+    document.addEventListener("DOMContentLoaded", function() {
+      new ServerTable({
+        tableSelector: "#sites-table",
+        apiUrl: "/api/sites",
+        defaultSortCol: "site_name",
+        defaultSortDir: "asc",
+        headers: [
+          "collecting",      // index 0
+          "controller_name",  // index 1
+          "site_name",        // index 2
+          "discovered",       // index 3
+          "customer_name",    // index 4
+          null                // Assign column (not sortable)
+        ],
+        rowRenderer: function(s) {
+          const collectingBadge = s.customer_id 
+            ? '<span class="badge online" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; white-space: nowrap;">collecting</span>'
+            : '<span class="badge neutral" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; white-space: nowrap;">not collected</span>';
+
+          const customerText = s.customer_name 
+            ? `<span style="font-weight: 500;">${s.customer_name}</span>`
+            : '<span class="badge offline" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; white-space: nowrap;">unassigned</span>';
+
+          const siteDescSmall = s.site_desc 
+            ? `<small style="display:block; color:var(--on-surface-variant); font-size:0.75rem;">${s.unifi_site_name}</small>`
+            : '';
+
+          const cleanDiscovered = s.discovered_at 
+            ? s.discovered_at.substring(0, 10) 
+            : '—';
+
+          // Build option list dynamically
+          let optionsHtml = `<option value="" disabled ${!s.customer_id ? 'selected' : ''}>Choose customer…</option>`;
+          customersList.forEach(c => {
+            optionsHtml += `<option value="${c.id}" ${s.customer_id === c.id ? 'selected' : ''}>${c.name}</option>`;
+          });
+
+          return `
+            <td>${collectingBadge}</td>
+            <td style="font-weight: 500;">${s.controller_name || '—'}</td>
+            <td>
+              <span style="font-weight: 600; color: var(--primary);">${s.site_desc || s.unifi_site_name}</span>
+              ${siteDescSmall}
+            </td>
+            <td style="color:var(--on-surface-variant); font-size:0.85rem;">${cleanDiscovered}</td>
+            <td>${customerText}</td>
+            <td>
+              <form class="inline" method="post" action="/sites/${s.id}/assign" style="display:flex; gap:0.4rem; max-width: 320px;">
+                <select name="customer_id" required style="padding: 0.35rem 0.5rem; font-size:0.85rem;">
+                  ${optionsHtml}
+                </select>
+                <button class="btn primary" type="submit" style="padding: 0.35rem 0.75rem; font-size:0.85rem;">Assign</button>
+              </form>
+            </td>
+          `;
+        }
+      });
     });
   </script>
 {% endblock %}

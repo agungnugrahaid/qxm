@@ -98,19 +98,91 @@ def is_online(last_seen_at):
 def list_routers(request: Request):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
-        SELECT r.*, c.name AS customer_name
-        FROM routers r
-        LEFT JOIN customers c ON c.id = r.customer_id
-        ORDER BY r.identity_name
-    """)
+    cur.execute("SELECT id, last_seen_at, last_deploy_status, priority FROM routers")
+    routers = cur.fetchall()
+    conn.close()
+
+    total = len(routers)
+    online = sum(1 for r in routers if is_online(r["last_seen_at"]))
+    critical = sum(1 for r in routers if r["priority"] == "critical")
+    ok_deploy = sum(1 for r in routers if r["last_deploy_status"] == "ok")
+    fail_deploy = sum(1 for r in routers if r["last_deploy_status"] == "failed")
+
+    stats = {
+        "total": total,
+        "online": online,
+        "critical": critical,
+        "ok_deploy": ok_deploy,
+        "fail_deploy": fail_deploy
+    }
+    return templates.TemplateResponse("routers_list.html", {"request": request, "stats": stats})
+
+
+@app.get("/api/routers")
+def api_routers(
+    search: str = "",
+    page: int = 1,
+    per_page: int = 25,
+    sort_col: str = "identity_name",
+    sort_dir: str = "asc"
+):
+    allowed_sort_cols = {
+        "identity_name": "r.identity_name",
+        "customer_name": "c.name",
+        "mgmt_host": "r.mgmt_host",
+        "status": "r.last_seen_at",
+        "priority": "r.priority",
+        "last_seen": "r.last_seen_at",
+        "last_deploy": "r.last_deploy_at"
+    }
+    db_sort_col = allowed_sort_cols.get(sort_col, "r.identity_name")
+    db_sort_dir = "ASC" if sort_dir.lower() == "asc" else "DESC"
+
+    offset = (page - 1) * per_page
+    conn = get_conn()
+    cur = conn.cursor()
+
+    if search:
+        search_query = f"%{search}%"
+        cur.execute("""
+            SELECT COUNT(*) AS count
+            FROM routers r
+            LEFT JOIN customers c ON c.id = r.customer_id
+            WHERE r.identity_name ILIKE %s OR c.name ILIKE %s OR r.mgmt_host ILIKE %s
+        """, (search_query, search_query, search_query))
+        total = cur.fetchone()["count"]
+
+        cur.execute(f"""
+            SELECT r.*, c.name AS customer_name
+            FROM routers r
+            LEFT JOIN customers c ON c.id = r.customer_id
+            WHERE r.identity_name ILIKE %s OR c.name ILIKE %s OR r.mgmt_host ILIKE %s
+            ORDER BY {db_sort_col} {db_sort_dir}
+            LIMIT %s OFFSET %s
+        """, (search_query, search_query, search_query, per_page, offset))
+    else:
+        cur.execute("SELECT COUNT(*) AS count FROM routers")
+        total = cur.fetchone()["count"]
+
+        cur.execute(f"""
+            SELECT r.*, c.name AS customer_name
+            FROM routers r
+            LEFT JOIN customers c ON c.id = r.customer_id
+            ORDER BY {db_sort_col} {db_sort_dir}
+            LIMIT %s OFFSET %s
+        """, (per_page, offset))
+
     routers = cur.fetchall()
     conn.close()
 
     for r in routers:
         r["online"] = is_online(r["last_seen_at"])
+        if r["last_seen_at"]:
+            r["last_seen_at"] = r["last_seen_at"].isoformat()
+        if r["last_deploy_at"]:
+            r["last_deploy_at"] = r["last_deploy_at"].isoformat()
 
-    return templates.TemplateResponse("routers_list.html", {"request": request, "routers": routers})
+    return {"data": routers, "total": total}
 
 
 @app.get("/routers/new")
@@ -381,20 +453,89 @@ def set_report_email(customer_id: int, report_email: str = Form("")):
 def list_sites(request: Request):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
-        SELECT s.*, ctl.name AS controller_name, c.name AS customer_name
-        FROM sites s
-        LEFT JOIN controllers ctl ON ctl.id = s.controller_id
-        LEFT JOIN customers c ON c.id = s.customer_id
-        ORDER BY (s.customer_id IS NULL), ctl.name, COALESCE(s.site_desc, s.unifi_site_name)
-    """)
+    cur.execute("SELECT customer_id FROM sites")
     sites = cur.fetchall()
     cur.execute("SELECT * FROM customers ORDER BY name")
     customers = cur.fetchall()
     conn.close()
+
+    total = len(sites)
+    collecting = sum(1 for s in sites if s["customer_id"] is not None)
+    not_collected = total - collecting
+
+    stats = {
+        "total": total,
+        "collecting": collecting,
+        "not_collected": not_collected
+    }
     return templates.TemplateResponse(
-        "sites_list.html", {"request": request, "sites": sites, "customers": customers}
+        "sites_list.html", {"request": request, "stats": stats, "customers": customers}
     )
+
+
+@app.get("/api/sites")
+def api_sites(
+    search: str = "",
+    page: int = 1,
+    per_page: int = 25,
+    sort_col: str = "site_name",
+    sort_dir: str = "asc"
+):
+    allowed_sort_cols = {
+        "collecting": "s.customer_id",
+        "controller_name": "ctl.name",
+        "site_name": "COALESCE(s.site_desc, s.unifi_site_name)",
+        "discovered": "s.discovered_at",
+        "customer_name": "c.name"
+    }
+    db_sort_col = allowed_sort_cols.get(sort_col, "COALESCE(s.site_desc, s.unifi_site_name)")
+    db_sort_dir = "ASC" if sort_dir.lower() == "asc" else "DESC"
+
+    offset = (page - 1) * per_page
+    conn = get_conn()
+    cur = conn.cursor()
+
+    if search:
+        search_query = f"%{search}%"
+        cur.execute("""
+            SELECT COUNT(*) AS count
+            FROM sites s
+            LEFT JOIN controllers ctl ON ctl.id = s.controller_id
+            LEFT JOIN customers c ON c.id = s.customer_id
+            WHERE s.site_desc ILIKE %s OR s.unifi_site_name ILIKE %s OR ctl.name ILIKE %s OR c.name ILIKE %s
+        """, (search_query, search_query, search_query, search_query))
+        total = cur.fetchone()["count"]
+
+        cur.execute(f"""
+            SELECT s.*, ctl.name AS controller_name, c.name AS customer_name
+            FROM sites s
+            LEFT JOIN controllers ctl ON ctl.id = s.controller_id
+            LEFT JOIN customers c ON c.id = s.customer_id
+            WHERE s.site_desc ILIKE %s OR s.unifi_site_name ILIKE %s OR ctl.name ILIKE %s OR c.name ILIKE %s
+            ORDER BY {db_sort_col} {db_sort_dir}
+            LIMIT %s OFFSET %s
+        """, (search_query, search_query, search_query, search_query, per_page, offset))
+    else:
+        cur.execute("SELECT COUNT(*) AS count FROM sites")
+        total = cur.fetchone()["count"]
+
+        cur.execute(f"""
+            SELECT s.*, ctl.name AS controller_name, c.name AS customer_name
+            FROM sites s
+            LEFT JOIN controllers ctl ON ctl.id = s.controller_id
+            LEFT JOIN customers c ON c.id = s.customer_id
+            ORDER BY {db_sort_col} {db_sort_dir}
+            LIMIT %s OFFSET %s
+        """, (per_page, offset))
+
+    sites = cur.fetchall()
+    conn.close()
+
+    for s in sites:
+        if s["discovered_at"]:
+            s["discovered_at"] = s["discovered_at"].isoformat()
+
+    return {"data": sites, "total": total}
 
 
 @app.post("/sites/{site_id}/assign")

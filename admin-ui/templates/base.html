@@ -1,47 +1,89 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>QoE Fleet Admin</title>
-  <style>
-    body { font-family: -apple-system, Arial, sans-serif; max-width: 960px; margin: 2rem auto; color: #1f2937; }
-    nav a { margin-right: 1rem; color: #1d4ed8; text-decoration: none; font-weight: 600; }
-    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-    th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #e5e7eb; font-size: 0.9rem; }
-    th { color: #6b7280; text-transform: uppercase; font-size: 0.75rem; }
-    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
-    .badge.online { background: #dcfce7; color: #166534; }
-    .badge.offline { background: #fee2e2; color: #991b1b; }
-    .btn { display: inline-block; padding: 0.35rem 0.7rem; border-radius: 6px; border: 1px solid #d1d5db; background: #f9fafb; color: #111827; text-decoration: none; font-size: 0.85rem; cursor: pointer; }
-    .btn.primary { background: #1d4ed8; color: white; border-color: #1d4ed8; }
-    form.inline { display: inline; }
-    .field { margin-bottom: 0.9rem; }
-    label { display: block; font-size: 0.85rem; color: #374151; margin-bottom: 0.25rem; }
-    input, select { width: 100%; padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 6px; box-sizing: border-box; }
-    .result-ok { color: #166534; }
-    .result-fail { color: #991b1b; }
-    .diff { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 0.75rem; overflow-x: auto; font-size: 0.8rem; line-height: 1.4; }
-    .diff-line { display: block; white-space: pre; font-family: ui-monospace, Menlo, monospace; }
-    .diff-add { background: #dcfce7; color: #166534; }
-    .diff-del { background: #fee2e2; color: #991b1b; }
-    .diff-hunk { color: #6b7280; font-weight: 600; }
-    .line-no { display: inline-block; width: 3.5rem; text-align: right; margin-right: 0.75rem; color: #9ca3af; user-select: none; }
-    /* Wide tables (Sites/Routers with datatables) benefit from more room */
-    body.wide { max-width: 1400px; }
-    /* Keep the datatable search/paging chrome aligned with our styling */
-    .datatable-input { width: auto; }
-    .datatable-selector { width: auto; }
-  </style>
+  
+  <!-- Typography & Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- Stylesheets -->
   <link rel="stylesheet" href="/static/simple-datatables.css">
+  <link rel="stylesheet" href="/static/dashboard.css">
   <script src="/static/simple-datatables.js"></script>
 </head>
 <body class="{% block bodyclass %}{% endblock %}">
-  <nav>
-    <a href="/">Routers</a>
-    <a href="/sites">Sites</a>
-    <a href="/customers">Customers</a>
-  </nav>
-  <hr>
-  {% block content %}{% endblock %}
+  
+  <!-- Mobile Header -->
+  <div class="mobile-nav-bar">
+    <div style="display:flex; align-items:center; gap:0.5rem;">
+      <i data-lucide="activity" style="color:var(--action-blue)"></i>
+      <span style="font-weight:700; letter-spacing:0.05em;">QoE FLEET</span>
+    </div>
+    <button class="mobile-nav-toggle" onclick="toggleMobileSidebar()" aria-label="Toggle Navigation">
+      <i data-lucide="menu"></i>
+    </button>
+  </div>
+
+  <div class="app-container">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar" id="app-sidebar">
+      <div class="sidebar-header">
+        <i data-lucide="activity" style="color:var(--action-blue); width:24px; height:24px;"></i>
+        <span class="logo-text">QoE FLEET</span>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="/" class="sidebar-link {% if request.url.path == '/' or '/routers' in request.url.path %}active{% endif %}">
+          <i data-lucide="router" style="width:18px; height:18px;"></i>
+          <span>Routers</span>
+        </a>
+        <a href="/sites" class="sidebar-link {% if '/sites' in request.url.path %}active{% endif %}">
+          <i data-lucide="map-pin" style="width:18px; height:18px;"></i>
+          <span>Sites</span>
+        </a>
+        <a href="/customers" class="sidebar-link {% if '/customers' in request.url.path %}active{% endif %}">
+          <i data-lucide="users" style="width:18px; height:18px;"></i>
+          <span>Customers</span>
+        </a>
+      </nav>
+      <div style="padding: 1rem; font-size: 0.75rem; color: rgba(255,255,255,0.4); border-top: 1px solid rgba(255,255,255,0.1);">
+        Lumina Console v1.0
+      </div>
+    </aside>
+
+    <!-- Main Content Panel -->
+    <main class="main-content">
+      <header class="top-header">
+        <div class="page-title-area">
+          <div style="display:flex; align-items:center; gap:0.5rem; font-size:0.8rem; color:var(--on-surface-variant); margin-bottom:0.25rem;">
+            <span>Console</span> &raquo; <span>{% block section_name %}System{% endblock %}</span>
+          </div>
+          <h1 style="margin: 0; font-size: 1.5rem; color: var(--primary);">{% block page_title %}Dashboard{% endblock %}</h1>
+        </div>
+        <div style="display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; color:var(--on-surface-variant)">
+          <i data-lucide="shield-check" style="width:16px; height:16px; color:var(--success)"></i>
+          <span>Secure Session</span>
+        </div>
+      </header>
+
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <script>
+    // Initialize Lucide Icons
+    lucide.createIcons();
+
+    // Responsive Mobile Sidebar Toggle
+    function toggleMobileSidebar() {
+      const sidebar = document.getElementById('app-sidebar');
+      sidebar.classList.toggle('open');
+    }
+  </script>
 </body>
 </html>
+
