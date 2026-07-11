@@ -140,40 +140,42 @@ def api_routers(
 
     offset = (page - 1) * per_page
     conn = get_conn()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    if search:
-        search_query = f"%{search}%"
-        cur.execute("""
-            SELECT COUNT(*) AS count
-            FROM routers r
-            LEFT JOIN customers c ON c.id = r.customer_id
-            WHERE r.identity_name ILIKE %s OR c.name ILIKE %s OR r.mgmt_host ILIKE %s
-        """, (search_query, search_query, search_query))
-        total = cur.fetchone()["count"]
+        if search:
+            search_query = f"%{search}%"
+            cur.execute("""
+                SELECT COUNT(*) AS count
+                FROM routers r
+                LEFT JOIN customers c ON c.id = r.customer_id
+                WHERE r.identity_name ILIKE %s OR c.name ILIKE %s OR r.mgmt_host ILIKE %s
+            """, (search_query, search_query, search_query))
+            total = cur.fetchone()["count"]
 
-        cur.execute(f"""
-            SELECT r.*, c.name AS customer_name
-            FROM routers r
-            LEFT JOIN customers c ON c.id = r.customer_id
-            WHERE r.identity_name ILIKE %s OR c.name ILIKE %s OR r.mgmt_host ILIKE %s
-            ORDER BY {db_sort_col} {db_sort_dir}
-            LIMIT %s OFFSET %s
-        """, (search_query, search_query, search_query, per_page, offset))
-    else:
-        cur.execute("SELECT COUNT(*) AS count FROM routers")
-        total = cur.fetchone()["count"]
+            cur.execute(f"""
+                SELECT r.*, c.name AS customer_name
+                FROM routers r
+                LEFT JOIN customers c ON c.id = r.customer_id
+                WHERE r.identity_name ILIKE %s OR c.name ILIKE %s OR r.mgmt_host ILIKE %s
+                ORDER BY {db_sort_col} {db_sort_dir}
+                LIMIT %s OFFSET %s
+            """, (search_query, search_query, search_query, per_page, offset))
+        else:
+            cur.execute("SELECT COUNT(*) AS count FROM routers")
+            total = cur.fetchone()["count"]
 
-        cur.execute(f"""
-            SELECT r.*, c.name AS customer_name
-            FROM routers r
-            LEFT JOIN customers c ON c.id = r.customer_id
-            ORDER BY {db_sort_col} {db_sort_dir}
-            LIMIT %s OFFSET %s
-        """, (per_page, offset))
+            cur.execute(f"""
+                SELECT r.*, c.name AS customer_name
+                FROM routers r
+                LEFT JOIN customers c ON c.id = r.customer_id
+                ORDER BY {db_sort_col} {db_sort_dir}
+                LIMIT %s OFFSET %s
+            """, (per_page, offset))
 
-    routers = cur.fetchall()
-    conn.close()
+        routers = cur.fetchall()
+    finally:
+        conn.close()
 
     for r in routers:
         r["online"] = is_online(r["last_seen_at"])
@@ -735,43 +737,45 @@ def api_sites(
 
     offset = (page - 1) * per_page
     conn = get_conn()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    if search:
-        search_query = f"%{search}%"
-        cur.execute("""
-            SELECT COUNT(*) AS count
-            FROM sites s
-            LEFT JOIN controllers ctl ON ctl.id = s.controller_id
-            LEFT JOIN customers c ON c.id = s.customer_id
-            WHERE s.site_desc ILIKE %s OR s.unifi_site_name ILIKE %s OR ctl.name ILIKE %s OR c.name ILIKE %s
-        """, (search_query, search_query, search_query, search_query))
-        total = cur.fetchone()["count"]
+        if search:
+            search_query = f"%{search}%"
+            cur.execute("""
+                SELECT COUNT(*) AS count
+                FROM sites s
+                LEFT JOIN controllers ctl ON ctl.id = s.controller_id
+                LEFT JOIN customers c ON c.id = s.customer_id
+                WHERE s.site_desc ILIKE %s OR s.unifi_site_name ILIKE %s OR ctl.name ILIKE %s OR c.name ILIKE %s
+            """, (search_query, search_query, search_query, search_query))
+            total = cur.fetchone()["count"]
 
-        cur.execute(f"""
-            SELECT s.*, ctl.name AS controller_name, c.name AS customer_name
-            FROM sites s
-            LEFT JOIN controllers ctl ON ctl.id = s.controller_id
-            LEFT JOIN customers c ON c.id = s.customer_id
-            WHERE s.site_desc ILIKE %s OR s.unifi_site_name ILIKE %s OR ctl.name ILIKE %s OR c.name ILIKE %s
-            ORDER BY {db_sort_col} {db_sort_dir}
-            LIMIT %s OFFSET %s
-        """, (search_query, search_query, search_query, search_query, per_page, offset))
-    else:
-        cur.execute("SELECT COUNT(*) AS count FROM sites")
-        total = cur.fetchone()["count"]
+            cur.execute(f"""
+                SELECT s.*, ctl.name AS controller_name, c.name AS customer_name
+                FROM sites s
+                LEFT JOIN controllers ctl ON ctl.id = s.controller_id
+                LEFT JOIN customers c ON c.id = s.customer_id
+                WHERE s.site_desc ILIKE %s OR s.unifi_site_name ILIKE %s OR ctl.name ILIKE %s OR c.name ILIKE %s
+                ORDER BY {db_sort_col} {db_sort_dir}
+                LIMIT %s OFFSET %s
+            """, (search_query, search_query, search_query, search_query, per_page, offset))
+        else:
+            cur.execute("SELECT COUNT(*) AS count FROM sites")
+            total = cur.fetchone()["count"]
 
-        cur.execute(f"""
-            SELECT s.*, ctl.name AS controller_name, c.name AS customer_name
-            FROM sites s
-            LEFT JOIN controllers ctl ON ctl.id = s.controller_id
-            LEFT JOIN customers c ON c.id = s.customer_id
-            ORDER BY {db_sort_col} {db_sort_dir}
-            LIMIT %s OFFSET %s
-        """, (per_page, offset))
+            cur.execute(f"""
+                SELECT s.*, ctl.name AS controller_name, c.name AS customer_name
+                FROM sites s
+                LEFT JOIN controllers ctl ON ctl.id = s.controller_id
+                LEFT JOIN customers c ON c.id = s.customer_id
+                ORDER BY {db_sort_col} {db_sort_dir}
+                LIMIT %s OFFSET %s
+            """, (per_page, offset))
 
-    sites = cur.fetchall()
-    conn.close()
+        sites = cur.fetchall()
+    finally:
+        conn.close()
 
     for s in sites:
         if s["discovered_at"]:
