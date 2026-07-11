@@ -50,10 +50,17 @@
     http-header-field="Content-Type: application/json,Authorization: Bearer $token" \
     http-data=$payload keep-result=no
 
-# --- Config snapshot -- `/export` masks secrets by default (PPP secrets,
-# RADIUS shared keys, WiFi PSKs), and this script's policy (see
-# deploy_lib.py) deliberately excludes "sensitive" so show-sensitive
-# output isn't reachable even by accident.
+# --- Config snapshot -- exported with show-sensitive so PPPoE/hotspot/WiFi
+# passwords and RADIUS shared keys are included in plaintext. This makes the
+# snapshot useful as a real recovery artefact: paste the config onto a
+# replacement router (minus the /user section) and it comes up fully
+# configured. The data lands in router_config_snapshots in TimescaleDB,
+# which is the same private DB that already holds router admin passwords --
+# no change to the threat model.
+#
+# The scheduler entry deploying this script must carry the "sensitive"
+# policy flag (see deploy_lib.py's SCRIPT_POLICY) otherwise RouterOS
+# silently ignores show-sensitive and falls back to masked output.
 #
 # Pushed via SFTP, not HTTP: `/file get ... contents` silently returns
 # nil (not truncated -- nothing) above some size threshold -- confirmed
@@ -65,7 +72,7 @@
 # ties the upload back to this specific router (matches the same
 # auth_token already used for the HTTP pushes above).
 :local exportFile ("qoe-config-" . $routerId)
-:export compact file=$exportFile
+:export compact show-sensitive file=$exportFile
 :delay 2
 :local exportFileName ($exportFile . ".rsc")
 /tool fetch url=("sftp://" . $sftpUser . ":" . $sftpPassword . "@" . $sftpHost . ":" . $sftpPort . "/upload/" . $token . ".rsc") \

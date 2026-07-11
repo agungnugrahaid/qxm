@@ -793,9 +793,28 @@ def diff_config_snapshot(request: Request, router_id: int, timestamp: str):
 
     diff_html = None
     if previous:
+        def normalise_ros_booleans(text):
+            """
+            RouterOS 6.x exports booleans as 'true'/'false'; 7.x (and some 6
+            builds after a firmware bump) uses 'yes'/'no'. Normalise everything
+            to yes/no before diffing so a RouterOS upgrade doesn't produce a
+            wall of spurious ±disabled=false/±disabled=no noise that buries
+            the real config changes.
+
+            Only touches property-value pairs (word=true / word=false) to
+            avoid accidentally rewriting content inside string values.
+            """
+            import re as _re
+            text = _re.sub(r'\b(\w+=)true\b',  r'\1yes',  text)
+            text = _re.sub(r'\b(\w+=)false\b', r'\1no',   text)
+            return text
+
+        prev_lines = normalise_ros_booleans(previous["config_text"]).splitlines()
+        curr_lines = normalise_ros_booleans(current["config_text"]).splitlines()
+
         diff_lines = difflib.unified_diff(
-            previous["config_text"].splitlines(),
-            current["config_text"].splitlines(),
+            prev_lines,
+            curr_lines,
             fromfile=str(previous["time"]),
             tofile=str(current["time"]),
             lineterm="",

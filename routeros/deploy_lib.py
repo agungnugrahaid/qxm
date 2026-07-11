@@ -92,7 +92,7 @@ def render_script(template, replacements):
     return out
 
 
-SCRIPT_POLICY = "ftp,policy,read,write,reboot,test"
+SCRIPT_POLICY = "ftp,policy,read,write,reboot,test,sensitive"
 
 
 def upsert_script(api, name, source):
