@@ -435,9 +435,11 @@ def get_manual_script(request: Request, router_id: int):
         '"SFTP_PASSWORD_PLACEHOLDER"', f'"{SFTP_CONFIG["password"]}"'
     )
 
-    # Syslog Host details
+    # Use the pre-configured IP (SYSLOG_IP) for the copy-paste commands --
+    # RouterOS 6.x rejects hostnames in the 'remote' field, so an IP is safer.
     syslog_host = SYSLOG_CONFIG["host"]
     syslog_port = SYSLOG_CONFIG["port"]
+    syslog_ip = os.environ.get("SYSLOG_IP", syslog_host)
 
     return templates.TemplateResponse(
         "router_manual_script.html",
