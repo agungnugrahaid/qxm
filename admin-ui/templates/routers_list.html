@@ -136,14 +136,14 @@
                 ${r.last_deploy_status.toUpperCase()}
               </span>
               <small style="display:block; color:var(--on-surface-variant); font-size:0.75rem; margin-top:0.15rem;">${cleanDate}</small>
-              <small style="display:block; font-size:0.75rem; opacity:0.8; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${r.last_deploy_detail || ''}">${r.last_deploy_detail || ''}</small>
+              <small style="display:block; font-size:0.75rem; opacity:0.8; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(r.last_deploy_detail)}">${esc(r.last_deploy_detail)}</small>
             `;
           }
 
           const cleanLastSeen = r.last_seen_at ? r.last_seen_at.substring(0, 19).replace('T', ' ') : 'never';
           
           const mgmtText = r.mgmt_host
-            ? `${r.mgmt_host}:${r.mgmt_port}`
+            ? `${esc(r.mgmt_host)}:${r.mgmt_port}`
             : '<span style="color:var(--on-surface-variant); font-style:italic;">NAT (No IP)</span>';
 
           const hasMgmt = r.mgmt_host && r.admin_user && r.admin_password;
@@ -160,8 +160,8 @@
               </button>`;
 
           return `
-            <td style="font-weight:600; color:var(--primary);">${r.identity_name}</td>
-            <td>${r.customer_name || '—'}</td>
+            <td style="font-weight:600; color:var(--primary);">${esc(r.identity_name)}</td>
+            <td>${esc(r.customer_name) || '—'}</td>
             <td style="font-family:ui-monospace, monospace; font-size:0.85rem;">${mgmtText}</td>
             <td>${statusBadge}</td>
             <td>${priorityBadge}</td>

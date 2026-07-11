@@ -95,29 +95,29 @@
             ? '<span class="badge online" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; white-space: nowrap;">collecting</span>'
             : '<span class="badge neutral" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; white-space: nowrap;">not collected</span>';
 
-          const customerText = s.customer_name 
-            ? `<span style="font-weight: 500;">${s.customer_name}</span>`
+          const customerText = s.customer_name
+            ? `<span style="font-weight: 500;">${esc(s.customer_name)}</span>`
             : '<span class="badge offline" style="font-size: 0.7rem; padding: 0.15rem 0.4rem; white-space: nowrap;">unassigned</span>';
 
-          const siteDescSmall = s.site_desc 
-            ? `<small style="display:block; color:var(--on-surface-variant); font-size:0.75rem;">${s.unifi_site_name}</small>`
+          const siteDescSmall = s.site_desc
+            ? `<small style="display:block; color:var(--on-surface-variant); font-size:0.75rem;">${esc(s.unifi_site_name)}</small>`
             : '';
 
-          const cleanDiscovered = s.discovered_at 
-            ? s.discovered_at.substring(0, 10) 
+          const cleanDiscovered = s.discovered_at
+            ? s.discovered_at.substring(0, 10)
             : '—';
 
           // Build option list dynamically
           let optionsHtml = `<option value="" disabled ${!s.customer_id ? 'selected' : ''}>Choose customer…</option>`;
           customersList.forEach(c => {
-            optionsHtml += `<option value="${c.id}" ${s.customer_id === c.id ? 'selected' : ''}>${c.name}</option>`;
+            optionsHtml += `<option value="${c.id}" ${s.customer_id === c.id ? 'selected' : ''}>${esc(c.name)}</option>`;
           });
 
           return `
             <td>${collectingBadge}</td>
-            <td style="font-weight: 500;">${s.controller_name || '—'}</td>
+            <td style="font-weight: 500;">${esc(s.controller_name) || '—'}</td>
             <td>
-              <span style="font-weight: 600; color: var(--primary);">${s.site_desc || s.unifi_site_name}</span>
+              <span style="font-weight: 600; color: var(--primary);">${esc(s.site_desc || s.unifi_site_name)}</span>
               ${siteDescSmall}
             </td>
             <td style="color:var(--on-surface-variant); font-size:0.85rem;">${cleanDiscovered}</td>

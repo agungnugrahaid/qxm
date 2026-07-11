@@ -485,7 +485,23 @@ def deploy_all(priority: str = Form(None)):
 def list_customers(request: Request):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM customers ORDER BY name")
+    cur.execute("""
+        SELECT c.*, 
+               COALESCE(r.router_count, 0) AS router_count,
+               COALESCE(s.site_count, 0) AS site_count
+        FROM customers c
+        LEFT JOIN (
+            SELECT customer_id, COUNT(*) AS router_count 
+            FROM routers 
+            GROUP BY customer_id
+        ) r ON r.customer_id = c.id
+        LEFT JOIN (
+            SELECT customer_id, COUNT(*) AS site_count 
+            FROM sites 
+            GROUP BY customer_id
+        ) s ON s.customer_id = c.id
+        ORDER BY c.name
+    """)
     customers = cur.fetchall()
     conn.close()
     return templates.TemplateResponse("customers_list.html", {"request": request, "customers": customers})
@@ -543,6 +559,16 @@ def show_customer_detail(request: Request, customer_id: int):
         ORDER BY s.site_desc
     """, (customer_id,))
     sites = cur.fetchall()
+
+    # Get Unassigned Sites (customer_id is NULL) to allow connecting them
+    cur.execute("""
+        SELECT s.*, c.name AS controller_name
+        FROM sites s
+        LEFT JOIN controllers c ON c.id = s.controller_id
+        WHERE s.customer_id IS NULL
+        ORDER BY s.site_desc, s.unifi_site_name
+    """)
+    unassigned_sites = cur.fetchall()
     
     conn.close()
     
@@ -552,7 +578,8 @@ def show_customer_detail(request: Request, customer_id: int):
             "request": request, 
             "customer": customer, 
             "routers": routers, 
-            "sites": sites
+            "sites": sites,
+            "unassigned_sites": unassigned_sites
         }
     )
 
@@ -754,13 +781,18 @@ def api_sites(
 
 
 @app.post("/sites/{site_id}/assign")
-def assign_site(site_id: int, customer_id: int = Form(...)):
+def assign_site(site_id: int, customer_id: int = Form(...), redirect_to: str = "/sites"):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("UPDATE sites SET customer_id = %s WHERE id = %s", (customer_id, site_id))
     conn.commit()
     conn.close()
-    return RedirectResponse("/sites", status_code=303)
+    # Only allow same-site relative paths -- never an absolute/scheme URL or
+    # protocol-relative "//host" -- so redirect_to can't be used as an open
+    # redirect off to another site.
+    if not (redirect_to.startswith("/") and not redirect_to.startswith("//")):
+        redirect_to = "/sites"
+    return RedirectResponse(redirect_to, status_code=303)
 
 
 @app.get("/config-snapshots/{router_id}")
@@ -805,7 +837,8 @@ def view_config_snapshot(request: Request, router_id: int, timestamp: str):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT config_text FROM router_config_snapshots WHERE router_id = %s AND time = %s",
+        "SELECT cs.config_text, r.identity_name FROM router_config_snapshots cs "
+        "JOIN routers r ON r.id = cs.router_id WHERE cs.router_id = %s AND cs.time = %s",
         (router_id, timestamp),
     )
     row = cur.fetchone()
@@ -819,7 +852,13 @@ def view_config_snapshot(request: Request, router_id: int, timestamp: str):
 
     return templates.TemplateResponse(
         "config_view.html",
-        {"request": request, "router_id": router_id, "timestamp": timestamp, "config_html": config_html},
+        {
+            "request": request, 
+            "router_id": router_id, 
+            "identity_name": row["identity_name"],
+            "timestamp": timestamp, 
+            "config_html": config_html
+        },
     )
 
 
@@ -828,7 +867,8 @@ def diff_config_snapshot(request: Request, router_id: int, timestamp: str):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT config_text, time FROM router_config_snapshots WHERE router_id = %s AND time = %s",
+        "SELECT cs.config_text, cs.time, r.identity_name FROM router_config_snapshots cs "
+        "JOIN routers r ON r.id = cs.router_id WHERE cs.router_id = %s AND cs.time = %s",
         (router_id, timestamp),
     )
     current = cur.fetchone()
@@ -935,6 +975,7 @@ def diff_config_snapshot(request: Request, router_id: int, timestamp: str):
         {
             "request": request,
             "router_id": router_id,
+            "identity_name": current["identity_name"] if current else None,
             "diff_html": diff_html,
             "older_timestamp": previous["time"].isoformat() if previous else None,
             "newer_timestamp": newer["time"].isoformat() if newer else None,

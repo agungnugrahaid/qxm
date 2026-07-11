@@ -3,6 +3,24 @@
  * Integrates directly with our FastAPI /api/ endpoints.
  */
 
+/**
+ * Escape a value for safe interpolation into an innerHTML string. Row
+ * renderers set tr.innerHTML from strings that interpolate DB values
+ * (router identity, customer/site names, deploy detail) -- some of which
+ * come from the routers/controllers themselves, not just trusted admins --
+ * so any such value MUST be passed through this to prevent stored XSS.
+ * Returns "" for null/undefined so `${esc(x)}` is safe on missing fields.
+ */
+function esc(v) {
+  if (v === null || v === undefined) return "";
+  return String(v)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 class ServerTable {
   constructor(options) {
     this.table = document.querySelector(options.tableSelector);
