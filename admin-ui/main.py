@@ -435,12 +435,12 @@ def delete_customer(customer_id: int):
     cur = conn.cursor()
     
     # Check for active routers
-    cur.execute("SELECT count(*) FROM routers WHERE customer_id = %s", (customer_id,))
-    router_count = cur.fetchone()[0]
+    cur.execute("SELECT count(*) AS cnt FROM routers WHERE customer_id = %s", (customer_id,))
+    router_count = cur.fetchone()["cnt"]
     
     # Check for active sites
-    cur.execute("SELECT count(*) FROM sites WHERE customer_id = %s", (customer_id,))
-    site_count = cur.fetchone()[0]
+    cur.execute("SELECT count(*) AS cnt FROM sites WHERE customer_id = %s", (customer_id,))
+    site_count = cur.fetchone()["cnt"]
     
     if router_count > 0 or site_count > 0:
         conn.close()
