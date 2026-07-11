@@ -201,22 +201,26 @@ def new_router_form(request: Request):
 def create_router(
     identity_name: str = Form(...),
     customer_id: int = Form(...),
-    mgmt_host: str = Form(...),
+    mgmt_host: str = Form(None),
     mgmt_port: int = Form(8728),
-    admin_user: str = Form(...),
-    admin_password: str = Form(...),
+    admin_user: str = Form(None),
+    admin_password: str = Form(None),
     wan_interface: str = Form("ether1"),
     wan_interface_backup: str = Form(""),
     use_ssl: bool = Form(False),
     priority: str = Form("standard"),
 ):
     token = secrets.token_hex(24)
+    mgmt_host_clean = mgmt_host.strip() if mgmt_host else None
+    admin_user_clean = admin_user.strip() if admin_user else None
+    admin_password_clean = admin_password.strip() if admin_password else None
+    
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO routers (customer_id, identity_name, auth_token, mgmt_host, mgmt_port, admin_user, admin_password, wan_interface, wan_interface_backup, use_ssl, priority) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (customer_id, identity_name, token, mgmt_host, mgmt_port, admin_user, admin_password, wan_interface, wan_interface_backup or None, use_ssl, priority),
+        (customer_id, identity_name, token, mgmt_host_clean, mgmt_port, admin_user_clean, admin_password_clean, wan_interface, wan_interface_backup or None, use_ssl, priority),
     )
     conn.commit()
     conn.close()
@@ -242,21 +246,25 @@ def update_router(
     router_id: int,
     identity_name: str = Form(...),
     customer_id: int = Form(...),
-    mgmt_host: str = Form(...),
+    mgmt_host: str = Form(None),
     mgmt_port: int = Form(8728),
-    admin_user: str = Form(...),
-    admin_password: str = Form(...),
+    admin_user: str = Form(None),
+    admin_password: str = Form(None),
     wan_interface: str = Form("ether1"),
     wan_interface_backup: str = Form(""),
     use_ssl: bool = Form(False),
     priority: str = Form("standard"),
 ):
+    mgmt_host_clean = mgmt_host.strip() if mgmt_host else None
+    admin_user_clean = admin_user.strip() if admin_user else None
+    admin_password_clean = admin_password.strip() if admin_password else None
+
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         "UPDATE routers SET identity_name=%s, customer_id=%s, mgmt_host=%s, mgmt_port=%s, "
         "admin_user=%s, admin_password=%s, wan_interface=%s, wan_interface_backup=%s, use_ssl=%s, priority=%s WHERE id=%s",
-        (identity_name, customer_id, mgmt_host, mgmt_port, admin_user, admin_password, wan_interface, wan_interface_backup or None, use_ssl, priority, router_id),
+        (identity_name, customer_id, mgmt_host_clean, mgmt_port, admin_user_clean, admin_password_clean, wan_interface, wan_interface_backup or None, use_ssl, priority, router_id),
     )
     conn.commit()
     conn.close()
@@ -348,8 +356,101 @@ def deploy_router(request: Request, router_id: int):
     router = cur.fetchone()
     conn.close()
 
+    if not router["mgmt_host"] or not router["admin_user"] or not router["admin_password"]:
+        result = {
+            "identity_name": router["identity_name"],
+            "ok": False,
+            "detail": "Failed: No management IP or credentials configured (configure manually for NAT routers)"
+        }
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE routers SET last_deploy_status = %s, last_deploy_at = %s, last_deploy_detail = %s WHERE id = %s",
+            ("failed", datetime.now(timezone.utc), result["detail"], router["id"]),
+        )
+        conn.commit()
+        conn.close()
+        return templates.TemplateResponse("deploy_result.html", {"request": request, "results": [result]})
+
     result = deploy_and_record(router)
     return templates.TemplateResponse("deploy_result.html", {"request": request, "results": [result]})
+
+
+@app.get("/routers/{router_id}/manual-script")
+def get_manual_script(request: Request, router_id: int):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM routers WHERE id = %s", (router_id,))
+    router = cur.fetchone()
+    conn.close()
+
+    if not router:
+        return RedirectResponse("/", status_code=303)
+
+    token = router["auth_token"]
+    wan_interface = router["wan_interface"] or "ether1"
+    wan_interface_backup = router["wan_interface_backup"] or ""
+
+    # Compile the metrics scripts
+    metrics_tpl_v7 = METRICS_TEMPLATES["v7"]
+    metrics_tpl_v6 = METRICS_TEMPLATES["v6"]
+
+    # Ingest URL
+    ingest_url = f"{INGEST_BASE_URL}/ingest"
+    firmware_url = f"{INGEST_BASE_URL}/ingest/firmware"
+
+    # Replacements for metrics
+    metrics_src_v7 = metrics_tpl_v7.replace(
+        '"https://monitor.yourisp.com/ingest"', f'"{ingest_url}"'
+    ).replace(
+        '"PER_ROUTER_AUTH_TOKEN"', f'"{token}"'
+    ).replace(
+        '"WAN_INTERFACE_PLACEHOLDER"', f'"{wan_interface}"'
+    ).replace(
+        '"WAN_INTERFACE_BACKUP_PLACEHOLDER"', f'"{wan_interface_backup}"'
+    )
+
+    metrics_src_v6 = metrics_tpl_v6.replace(
+        '"https://monitor.yourisp.com/ingest"', f'"{ingest_url}"'
+    ).replace(
+        '"PER_ROUTER_AUTH_TOKEN"', f'"{token}"'
+    ).replace(
+        '"WAN_INTERFACE_PLACEHOLDER"', f'"{wan_interface}"'
+    ).replace(
+        '"WAN_INTERFACE_BACKUP_PLACEHOLDER"', f'"{wan_interface_backup}"'
+    )
+
+    # Compile the firmware script
+    firmware_src = FIRMWARE_TPL.replace(
+        '"https://monitor.yourisp.com/ingest/firmware"', f'"{firmware_url}"'
+    ).replace(
+        '"PER_ROUTER_AUTH_TOKEN"', f'"{token}"'
+    ).replace(
+        '"SFTP_HOST_PLACEHOLDER"', f'"{SFTP_CONFIG["host"]}"'
+    ).replace(
+        '"SFTP_PORT_PLACEHOLDER"', f'"{SFTP_CONFIG["port"]}"'
+    ).replace(
+        '"SFTP_USER_PLACEHOLDER"', f'"{SFTP_CONFIG["user"]}"'
+    ).replace(
+        '"SFTP_PASSWORD_PLACEHOLDER"', f'"{SFTP_CONFIG["password"]}"'
+    )
+
+    # Syslog Host details
+    syslog_host = SYSLOG_CONFIG["host"]
+    syslog_port = SYSLOG_CONFIG["port"]
+
+    return templates.TemplateResponse(
+        "router_manual_script.html",
+        {
+            "request": request,
+            "router": router,
+            "metrics_src_v7": metrics_src_v7,
+            "metrics_src_v6": metrics_src_v6,
+            "firmware_src": firmware_src,
+            "syslog_host": syslog_host,
+            "syslog_port": syslog_port,
+        },
+    )
 
 
 @app.post("/deploy-all")

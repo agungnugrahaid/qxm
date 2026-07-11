@@ -22,8 +22,8 @@
         </div>
 
         <div class="field">
-          <label>Management host/IP</label>
-          <input name="mgmt_host" value="{{ router.mgmt_host if router else '' }}" required placeholder="e.g. 192.168.88.1">
+          <label>Management host/IP (optional)</label>
+          <input name="mgmt_host" value="{{ router.mgmt_host if router and router.mgmt_host else '' }}" placeholder="e.g. 192.168.88.1 (leave blank for NAT)">
         </div>
 
         <div class="field">
@@ -32,13 +32,13 @@
         </div>
 
         <div class="field">
-          <label>Admin username</label>
-          <input name="admin_user" value="{{ router.admin_user if router else '' }}" required>
+          <label>Admin username (optional)</label>
+          <input name="admin_user" value="{{ router.admin_user if router and router.admin_user else '' }}" placeholder="e.g. admin">
         </div>
 
         <div class="field">
-          <label>Admin password</label>
-          <input name="admin_password" type="password" value="{{ router.admin_password if router else '' }}" required>
+          <label>Admin password (optional)</label>
+          <input name="admin_password" type="password" value="{{ router.admin_password if router and router.admin_password else '' }}" placeholder="e.g. password123">
         </div>
 
         <div class="field">

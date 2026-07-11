@@ -83,14 +83,14 @@
     <table id="routers-table">
       <thead>
         <tr>
-          <th style="width: 15%;">Identity</th>
-          <th style="width: 12%;">Customer</th>
-          <th style="width: 14%;">Mgmt host</th>
+          <th style="width: 13%;">Identity</th>
+          <th style="width: 11%;">Customer</th>
+          <th style="width: 13%;">Mgmt host</th>
           <th style="width: 7%;">Status</th>
           <th style="width: 8%;">Priority</th>
           <th style="width: 10%;">Last seen</th>
-          <th style="width: 11%;">Last deploy</th>
-          <th style="width: 23%;">Actions</th>
+          <th style="width: 10%;">Last deploy</th>
+          <th style="width: 28%;">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -141,11 +141,28 @@
           }
 
           const cleanLastSeen = r.last_seen_at ? r.last_seen_at.substring(0, 19).replace('T', ' ') : 'never';
+          
+          const mgmtText = r.mgmt_host
+            ? `${r.mgmt_host}:${r.mgmt_port}`
+            : '<span style="color:var(--on-surface-variant); font-style:italic;">NAT (No IP)</span>';
+
+          const hasMgmt = r.mgmt_host && r.admin_user && r.admin_password;
+          const deployBtn = hasMgmt
+            ? `<form class="inline" method="post" action="/routers/${r.id}/deploy">
+                <button class="btn primary" type="submit" title="Force deploy script now">
+                  <i data-lucide="play" style="width:14px; height:14px;"></i>
+                  <span class="btn-text">Deploy</span>
+                </button>
+              </form>`
+            : `<button class="btn primary" type="button" disabled title="No management details configured; configure manually" style="opacity:0.4; cursor:not-allowed;">
+                <i data-lucide="play" style="width:14px; height:14px;"></i>
+                <span class="btn-text">Deploy</span>
+              </button>`;
 
           return `
             <td style="font-weight:600; color:var(--primary);">${r.identity_name}</td>
             <td>${r.customer_name || '—'}</td>
-            <td style="font-family:ui-monospace, monospace; font-size:0.85rem;">${r.mgmt_host}:${r.mgmt_port}</td>
+            <td style="font-family:ui-monospace, monospace; font-size:0.85rem;">${mgmtText}</td>
             <td>${statusBadge}</td>
             <td>${priorityBadge}</td>
             <td style="font-size:0.85rem; color:var(--on-surface-variant);">${cleanLastSeen}</td>
@@ -160,12 +177,11 @@
                   <i data-lucide="history" style="width:14px; height:14px;"></i>
                   <span class="btn-text">History</span>
                 </a>
-                <form class="inline" method="post" action="/routers/${r.id}/deploy">
-                  <button class="btn primary" type="submit" title="Force deploy script now">
-                    <i data-lucide="play" style="width:14px; height:14px;"></i>
-                    <span class="btn-text">Deploy</span>
-                  </button>
-                </form>
+                <a class="btn" href="/routers/${r.id}/manual-script" title="Get manual installation scripts">
+                  <i data-lucide="terminal" style="width:14px; height:14px;"></i>
+                  <span class="btn-text">Manual</span>
+                </a>
+                ${deployBtn}
               </div>
             </td>
           `;
