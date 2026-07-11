@@ -79,7 +79,7 @@
 /system scheduler add name=qoe-push-firmware interval=1d on-event=qoe-push-firmware
 
 # 2. Configure remote syslog forwarding to Loki
-/system logging action add name=qoe-remote target=remote remote={{ syslog_host }} remote-port={{ syslog_port }}
+/system logging action add name=qoe-remote target=remote remote={{ syslog_ip }} remote-port={{ syslog_port }}
 /system logging add action=qoe-remote topics=info
 /system logging add action=qoe-remote topics=warning
 /system logging add action=qoe-remote topics=error
