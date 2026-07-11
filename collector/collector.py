@@ -24,8 +24,13 @@ dispatches on it via CONTROLLER_POLLERS below. Two vendors today:
     per-client signal/band/channel/ssid/ip and per-AP status/channel-util,
     but NOT satisfaction, noise (so no SNR), or per-client retry counters
     -- those columns are left NULL and the corresponding dashboard cards
-    read n/a for Ruijie sites. Rate-limited (20/sec, 5000 calls/day), so
-    it runs on a slower per-controller poll interval (see poll_all).
+    read n/a for Ruijie sites. Rate-limited (20/sec, 5000 calls/day); it
+    polls every 600s (10-min cadence, comfortably inside the dashboard's
+    15-min freshness window) and fetches devices+clients per paired
+    building (not a bulk account sweep), so the daily call budget is
+    ~1 + 2*paired_buildings per cycle -- proportional to what's collected,
+    not the ~300-building account. Raise the interval toward 900s if the
+    paired-building count ever gets large enough to approach the budget.
 
 Adding a further vendor is "write one poll_<vendor>_controller and
 register it" -- no change to poll_all/main_loop.
@@ -362,25 +367,6 @@ def _ruijie_walk_buildings(node, acc):
             _ruijie_walk_buildings(v, acc)
 
 
-def _ruijie_root_group_id(node):
-    """The ROOT-type group id -- passing it to the devices endpoint returns
-    every device across all buildings in one paginated sweep (confirmed
-    live), which is what keeps us under the daily call budget."""
-    if isinstance(node, dict):
-        if node.get("type") == "ROOT" and node.get("groupId"):
-            return node["groupId"]
-        for v in node.values():
-            found = _ruijie_root_group_id(v)
-            if found is not None:
-                return found
-    elif isinstance(node, list):
-        for v in node:
-            found = _ruijie_root_group_id(v)
-            if found is not None:
-                return found
-    return None
-
-
 async def poll_ruijie_controller(ctrl, conn):
     call_counter = [0]
     # Ruijie's self-signed-free cloud uses real TLS, but SSL_CTX (verify
@@ -399,7 +385,6 @@ async def poll_ruijie_controller(ctrl, conn):
         _ruijie_walk_buildings(tree_root, buildings)
         for gid, name in buildings:
             ensure_site(conn, controller_id, str(gid), name)
-        root_group_id = _ruijie_root_group_id(tree_root)
 
         # --- Which buildings are customer-paired (collect only those).
         cur = conn.cursor()
@@ -410,8 +395,6 @@ async def poll_ruijie_controller(ctrl, conn):
         )
         paired = cur.fetchall()  # (site_id, groupId-as-str)
         cur.close()
-        paired_gids = {gid for _, gid in paired}
-        site_id_by_gid = {gid: sid for sid, gid in paired}
 
         if not paired:
             print(f"[{ctrl['name']}] {len(buildings)} buildings discovered, 0 collecting "
@@ -420,65 +403,66 @@ async def poll_ruijie_controller(ctrl, conn):
 
         now = datetime.now(timezone.utc)
 
-        # --- APs: one bulk paginated sweep at ROOT returns every device
-        # across all buildings; filter locally to paired ones. Also build
-        # a serial->mac map so clients (which reference their AP by serial)
-        # can be linked to an ap_mac.
-        serial_to_mac = {}
-        ap_rows_by_gid = {}
-        page = 1
-        while True:
-            devs = await _ruijie_get(
-                session, ctrl, "/service/api/maint/devices",
-                {"group_id": root_group_id, "page": page, "per_page": 100,
-                 "access_token": token},
-                call_counter,
-            )
-            device_list = devs.get("deviceList", [])
-            for d in device_list:
-                mac = _ruijie_mac(d.get("mac"))
-                if d.get("serialNumber"):
-                    serial_to_mac[d["serialNumber"]] = mac
-                if d.get("commonType") != "AP":
-                    continue
-                gid = str(d.get("buildingId") or d.get("groupId"))
-                if gid not in paired_gids:
-                    continue
-                ap_rows_by_gid.setdefault(gid, []).append((
-                    now, site_id_by_gid[gid], mac, d.get("aliasName") or d.get("name"),
-                    d.get("productClass"), d.get("softwareVersion"),
-                    None, None,  # cpu_pct, mem_pct -- not exposed
-                    d.get("radio1ChannelUtil"), d.get("radio2ChannelUtil"),
-                    1 if d.get("onlineStatus") == "ON" else 0,
-                    None,  # satisfaction -- not exposed
-                    d.get("staNums"),
-                    None,  # uptime -- not exposed
-                    d.get("localIp"),
-                ))
-            if len(device_list) < 100:
-                break
-            page += 1
-
+        # --- Per-paired-building: fetch that building's devices then its
+        # clients. Deliberately NOT a bulk ROOT device sweep -- that pulls
+        # every device in the whole account (~26 calls) regardless of how
+        # few buildings we actually collect, which dominates the daily
+        # budget. Per-building keeps cost proportional to paired count
+        # (confirmed: group_id=<building> returns exactly that building's
+        # devices), which is what lets Ruijie run at the tighter 600s
+        # interval its 15-min dashboard freshness needs.
         ap_written = 0
-        cur = conn.cursor()
-        for gid, rows in ap_rows_by_gid.items():
-            cur.executemany(
-                "INSERT INTO ap_inventory "
-                "(time, site_id, ap_mac, ap_name, model, version, cpu_pct, mem_pct, "
-                "channel_util_2g, channel_util_5g, state, satisfaction, num_sta, uptime, ip) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                rows,
-            )
-            ap_written += len(rows)
-        conn.commit()
-        cur.close()
-
-        # --- Clients: per paired building (ROOT returns none for clients).
-        # satisfaction/noise/tx_retries/wifi_tx_attempts/tx_rate/rx_rate are
-        # not exposed by Ruijie -> NULL (those dashboard cards read n/a).
         client_written = 0
         for site_id, gid in paired:
-            rows = []
+            # Devices -> AP rows + a serial->mac map for this building, so
+            # clients (which reference their AP by serial) get an ap_mac.
+            serial_to_mac = {}
+            ap_rows = []
+            page = 1
+            while True:
+                devs = await _ruijie_get(
+                    session, ctrl, "/service/api/maint/devices",
+                    {"group_id": gid, "page": page, "per_page": 100, "access_token": token},
+                    call_counter,
+                )
+                device_list = devs.get("deviceList", [])
+                for d in device_list:
+                    mac = _ruijie_mac(d.get("mac"))
+                    if d.get("serialNumber"):
+                        serial_to_mac[d["serialNumber"]] = mac
+                    if d.get("commonType") != "AP":
+                        continue
+                    ap_rows.append((
+                        now, site_id, mac, d.get("aliasName") or d.get("name"),
+                        d.get("productClass"), d.get("softwareVersion"),
+                        None, None,  # cpu_pct, mem_pct -- not exposed
+                        d.get("radio1ChannelUtil"), d.get("radio2ChannelUtil"),
+                        1 if d.get("onlineStatus") == "ON" else 0,
+                        None,  # satisfaction -- not exposed
+                        d.get("staNums"),
+                        None,  # uptime -- not exposed
+                        d.get("localIp"),
+                    ))
+                if len(device_list) < 100:
+                    break
+                page += 1
+            if ap_rows:
+                cur = conn.cursor()
+                cur.executemany(
+                    "INSERT INTO ap_inventory "
+                    "(time, site_id, ap_mac, ap_name, model, version, cpu_pct, mem_pct, "
+                    "channel_util_2g, channel_util_5g, state, satisfaction, num_sta, uptime, ip) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    ap_rows,
+                )
+                conn.commit()
+                cur.close()
+                ap_written += len(ap_rows)
+
+            # Clients. satisfaction/noise/tx_retries/wifi_tx_attempts/
+            # tx_rate/rx_rate are not exposed by Ruijie -> NULL (those
+            # dashboard cards read n/a for Ruijie sites).
+            client_rows = []
             page_index = 1
             while True:
                 data = await _ruijie_get(
@@ -493,9 +477,9 @@ async def poll_ruijie_controller(ctrl, conn):
                         continue
                     band = c.get("band")
                     radio = "ng" if band == "2.4G" else ("na" if band == "5G" else None)
-                    ap_mac = serial_to_mac.get(c.get("linkedDevice"))
-                    rows.append((
-                        now, site_id, _ruijie_mac(c.get("mac")), ap_mac,
+                    client_rows.append((
+                        now, site_id, _ruijie_mac(c.get("mac")),
+                        serial_to_mac.get(c.get("linkedDevice")),  # ap_mac
                         c.get("rssi"),  # signal
                         None,  # satisfaction
                         radio,
@@ -509,18 +493,18 @@ async def poll_ruijie_controller(ctrl, conn):
                 if len(client_list) < 200:
                     break
                 page_index += 1
-            if rows:
+            if client_rows:
                 cur = conn.cursor()
                 cur.executemany(
                     "INSERT INTO client_metrics (time, site_id, client_mac, ap_mac, signal, "
                     "satisfaction, radio, tx_retries, wifi_tx_attempts, tx_rate, rx_rate, "
                     "noise, channel, essid, is_wired, hostname, ip) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    rows,
+                    client_rows,
                 )
                 conn.commit()
                 cur.close()
-                client_written += len(rows)
+                client_written += len(client_rows)
 
         print(f"[{ctrl['name']}] {len(buildings)} buildings discovered, {len(paired)} collecting "
               f"-- {ap_written} APs, {client_written} clients ({call_counter[0]} API calls)")
