@@ -6,6 +6,15 @@
 {% block content %}
   <script src="/static/server_table.js"></script>
 
+  {% if request.query_params.get('deploy_started') is not none %}
+  <div class="info-notification">
+    <strong>Bulk deploy started</strong> for {{ request.query_params.get('deploy_started') }} router(s) &mdash; refresh to watch per-router status update.
+    {% if request.query_params.get('deploy_skipped', '0') != '0' %}
+    {{ request.query_params.get('deploy_skipped') }} router(s) skipped: no management IP/credentials configured (their last-deploy info is left as-is).
+    {% endif %}
+  </div>
+  {% endif %}
+
   <!-- Stats Grid -->
   <div class="stats-grid">
     <div class="stat-card">

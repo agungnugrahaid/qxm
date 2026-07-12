@@ -458,6 +458,12 @@ def deploy_all_bg(router_ids):
     routers = cur.fetchall()
     conn.close()
     for router in routers:
+        # No management IP/credentials = unmanaged, not a deploy failure:
+        # leave last_deploy_* untouched so the row keeps showing when the
+        # router last actually received a script. (/deploy-all already
+        # filters these out; this guards direct callers.)
+        if not (router["mgmt_host"] and router["admin_user"] and router["admin_password"]):
+            continue
         deploy_and_record(router)
 
 
@@ -580,18 +586,26 @@ def deploy_all(priority: str = Form(None)):
     the router list to watch last_deploy_status/at/detail update per
     router as it works through the batch, rather than waiting for one
     big result table at the end.
+
+    Routers without a management IP/credentials are skipped up front
+    (unmanaged, not failed -- their last_deploy_* fields stay untouched);
+    the redirect carries started/skipped counts for the list-page banner.
     """
     conn = get_conn()
     cur = conn.cursor()
     if priority:
-        cur.execute("SELECT id FROM routers WHERE priority = %s", (priority,))
+        cur.execute("SELECT id, mgmt_host, admin_user, admin_password FROM routers WHERE priority = %s", (priority,))
     else:
-        cur.execute("SELECT id FROM routers")
-    router_ids = [row["id"] for row in cur.fetchall()]
+        cur.execute("SELECT id, mgmt_host, admin_user, admin_password FROM routers")
+    rows = cur.fetchall()
     conn.close()
 
-    threading.Thread(target=deploy_all_bg, args=(router_ids,), daemon=True).start()
-    return RedirectResponse("/", status_code=303)
+    deployable = [r["id"] for r in rows if r["mgmt_host"] and r["admin_user"] and r["admin_password"]]
+    skipped = len(rows) - len(deployable)
+
+    if deployable:
+        threading.Thread(target=deploy_all_bg, args=(deployable,), daemon=True).start()
+    return RedirectResponse(f"/?deploy_started={len(deployable)}&deploy_skipped={skipped}", status_code=303)
 
 
 @app.get("/customers")
