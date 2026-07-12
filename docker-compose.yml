@@ -150,6 +150,9 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GF_SECURITY_DISABLE_BRUTE_FORCE_LOGIN_PROTECTION: "true"
+      # Public URL Grafana is served at -- so it emits correct absolute
+      # links (share, redirects). Matches the Caddy vhost + GRAFANA_PUBLIC_URL.
+      GF_SERVER_ROOT_URL: ${GRAFANA_PUBLIC_URL:-https://grafana.yourisp.com}
       DB_PASSWORD: ${DB_PASSWORD:-changeme}   # used by datasources.yml provisioning
       # PNG rendering for the customer PDF reports (see reporting/) --
       # Grafana OSS has no built-in PDF export, so panels are rendered to
