@@ -5,10 +5,11 @@
 # All four need DNS A/AAAA records pointing at this VM's public IP.
 #
 # ingestion is the only one that MUST be public (250 CPE routers push to
-# it). Grafana/Adminer/admin-ui are internal tools — gated with basic auth
-# below as a baseline; if you have a fixed admin/office IP range or a VPN,
-# swap the basicauth block for an IP allowlist instead (stronger, and
-# means credentials leaking isn't enough to get in).
+# it). Grafana/Adminer/admin-ui are internal tools. admin-ui and Grafana
+# bring their own login pages (ADMIN_UI_* vars in .env / Grafana's auth),
+# so no basic-auth in front of those; Adminer has none worth trusting, so
+# it keeps a basic-auth gate. If you have a fixed admin/office IP range or
+# a VPN, an IP allowlist on the internal hosts is stronger still.
 
 {
 	email admin@yourisp.com
@@ -19,22 +20,18 @@ monitor.yourisp.com {
 }
 
 admin.yourisp.com {
-	basicauth {
-		# Generate with: docker compose run --rm caddy caddy hash-password
-		admin JDJhJDE0JFJEQ0hBTkdFX01FX1BMQUNFSE9MREVSX0hBU0g
-	}
+	# admin-ui has its own login (session cookie, ADMIN_UI_* vars in .env).
 	reverse_proxy admin-ui:8082
 }
 
 grafana.yourisp.com {
-	basicauth {
-		admin JDJhJDE0JFJEQ0hBTkdFX01FX1BMQUNFSE9MREVSX0hBU0g
-	}
+	# Grafana's own login is the gate.
 	reverse_proxy grafana:3000
 }
 
 adminer.yourisp.com {
 	basicauth {
+		# Generate with: docker compose run --rm caddy caddy hash-password
 		admin JDJhJDE0JFJEQ0hBTkdFX01FX1BMQUNFSE9MREVSX0hBU0g
 	}
 	reverse_proxy adminer:8080

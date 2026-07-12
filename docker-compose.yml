@@ -70,6 +70,11 @@ services:
       SFTP_ALLOWED_CIDRS: ${SFTP_ALLOWED_CIDRS:-}
       RADIUS_SERVER_1_SECRET: ${RADIUS_SERVER_1_SECRET:-changeme}
       RADIUS_SERVER_2_SECRET: ${RADIUS_SERVER_2_SECRET:-changeme}
+      # App-level login. Empty password = logins refused (fail closed).
+      ADMIN_UI_USER: ${ADMIN_UI_USER:-admin}
+      ADMIN_UI_PASSWORD: ${ADMIN_UI_PASSWORD:-}
+      ADMIN_UI_SESSION_SECRET: ${ADMIN_UI_SESSION_SECRET:-}
+      ADMIN_UI_SESSION_HOURS: ${ADMIN_UI_SESSION_HOURS:-8}
     volumes:
       # Read-only: source template for generating customer-locked
       # dashboard clones (see dashboard_share.py). Generated dashboards

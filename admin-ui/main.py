@@ -31,12 +31,17 @@ new site on a controller — customer_id starts out NULL until assigned here.
 This page is what closes that gap.
 """
 
+import base64
 import difflib
+import hashlib
+import hmac
 import html
 import os
 import re
 import secrets
 import threading
+import time
+import urllib.parse
 from datetime import datetime, timezone
 
 import psycopg2
@@ -72,11 +77,117 @@ RADIUS_CONFIG = {
 # tracked as a second separate list.
 GMEDIA_CIDRS = [c.strip() for c in os.environ.get("SFTP_ALLOWED_CIDRS", "").split(",") if c.strip()]
 
-app = FastAPI(title="QoE Fleet Admin")
+app = FastAPI(title="QXM Console")
 # Vendored assets (simple-datatables) -- served locally rather than from a
 # CDN so the admin UI has no external dependency at page load.
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+# Drop a company logo at admin-ui/static/logo.png (checked at startup) to
+# replace the generic activity icon in the sidebar/mobile headers.
+templates.env.globals["logo_exists"] = os.path.exists("static/logo.png")
+
+# --- App-level login ---------------------------------------------------------
+# Sessions are stateless HMAC-signed cookies (no server-side store, no extra
+# deps): base64("user:expiry_ts") + "." + HMAC-SHA256 over that payload.
+# ADMIN_UI_PASSWORD empty means logins are refused (fail closed) so a missing
+# env var can't silently expose the UI. Without ADMIN_UI_SESSION_SECRET a
+# random per-process secret is used, which logs everyone out on restart.
+ADMIN_UI_USER = os.environ.get("ADMIN_UI_USER", "admin")
+ADMIN_UI_PASSWORD = os.environ.get("ADMIN_UI_PASSWORD", "")
+SESSION_SECRET = (os.environ.get("ADMIN_UI_SESSION_SECRET") or secrets.token_hex(32)).encode()
+SESSION_HOURS = int(os.environ.get("ADMIN_UI_SESSION_HOURS", "8"))
+# secure=True drops the cookie on plain-http access; disable only if the UI
+# is ever served without Caddy's TLS in front.
+COOKIE_SECURE = os.environ.get("ADMIN_UI_COOKIE_SECURE", "1") == "1"
+SESSION_COOKIE = "qxm_session"
+
+
+def _sign(payload: str) -> str:
+    return hmac.new(SESSION_SECRET, payload.encode(), hashlib.sha256).hexdigest()
+
+
+def make_session_cookie(username: str) -> str:
+    payload = f"{username}:{int(time.time()) + SESSION_HOURS * 3600}"
+    return base64.urlsafe_b64encode(payload.encode()).decode() + "." + _sign(payload)
+
+
+def verify_session_cookie(value: str):
+    """Returns the username, or None if the cookie is missing/tampered/expired."""
+    try:
+        encoded, sig = value.rsplit(".", 1)
+        payload = base64.urlsafe_b64decode(encoded.encode()).decode()
+        if not hmac.compare_digest(_sign(payload), sig):
+            return None
+        username, expires = payload.rsplit(":", 1)
+        if time.time() > int(expires):
+            return None
+        return username
+    except Exception:
+        return None
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    # /health stays open for the watchdog; /static for the login page's CSS.
+    if path in ("/login", "/health") or path.startswith("/static/"):
+        return await call_next(request)
+    user = verify_session_cookie(request.cookies.get(SESSION_COOKIE, ""))
+    if user is None:
+        if request.method == "GET":
+            target = path + ("?" + str(request.url.query) if request.url.query else "")
+            return RedirectResponse("/login?next=" + urllib.parse.quote(target, safe=""), status_code=303)
+        return RedirectResponse("/login", status_code=303)
+    request.state.session_user = user
+    return await call_next(request)
+
+
+def _safe_next(next_url: str) -> str:
+    # Same-site paths only, so ?next= can't be turned into an open redirect.
+    if next_url.startswith("/") and not next_url.startswith("//"):
+        return next_url
+    return "/"
+
+
+@app.get("/login")
+def login_form(request: Request, next: str = "/"):
+    if verify_session_cookie(request.cookies.get(SESSION_COOKIE, "")):
+        return RedirectResponse("/", status_code=303)
+    return templates.TemplateResponse(
+        "login.html", {"request": request, "error": None, "next": _safe_next(next)}
+    )
+
+
+@app.post("/login")
+def login_submit(request: Request, username: str = Form(""), password: str = Form(""), next: str = Form("/")):
+    # compare_digest on both fields keeps the check constant-time; the sleep
+    # blunts online brute-forcing without needing a lockout table.
+    user_ok = secrets.compare_digest(username, ADMIN_UI_USER)
+    pass_ok = ADMIN_UI_PASSWORD and secrets.compare_digest(password, ADMIN_UI_PASSWORD)
+    if not (user_ok and pass_ok):
+        time.sleep(1)
+        error = "Invalid username or password." if ADMIN_UI_PASSWORD else "Login disabled: ADMIN_UI_PASSWORD is not set."
+        return templates.TemplateResponse(
+            "login.html", {"request": request, "error": error, "next": _safe_next(next)}, status_code=401
+        )
+    resp = RedirectResponse(_safe_next(next), status_code=303)
+    resp.set_cookie(
+        SESSION_COOKIE,
+        make_session_cookie(username),
+        max_age=SESSION_HOURS * 3600,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite="lax",
+    )
+    return resp
+
+
+@app.post("/logout")
+def logout():
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(SESSION_COOKIE)
+    return resp
+# -----------------------------------------------------------------------------
 
 METRICS_TEMPLATES, FIRMWARE_TPL, BASELINE_TEMPLATES = load_templates()
 
