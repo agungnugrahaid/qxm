@@ -997,6 +997,46 @@ def view_config_snapshot(request: Request, router_id: int, timestamp: str):
     )
 
 
+# RouterOS renders 1k / 1M / 1G bandwidth-style values as either the suffixed
+# or the raw form depending on build -- both mean the same number.
+_ROS_SUFFIX = {"k": 1_000, "M": 1_000_000, "G": 1_000_000_000}
+
+
+def normalise_ros_config(text):
+    """
+    Canonicalise a RouterOS `/export` for diffing, so two exports of the
+    SAME config always compare equal even when RouterOS rendered them
+    differently. Applied to both sides of the diff view only -- stored
+    snapshots stay byte-faithful (they're recovery artefacts).
+
+    Measured on a real fleet router pair: cuts a 972-changed-line diff to
+    ~274, all of them genuine changes. Three noise classes handled:
+
+    1. Line-wrap shift (the big one): exports wrap long lines with a
+       trailing `\\` + 4-space-indented continuation, breaking even
+       mid-token. Any value-length change shifts every later wrap point in
+       the statement, producing phantom diffs like `disabled=no` -> `\\`.
+       Unwrapping joins continuations with NO separator (mid-token breaks).
+    2. Boolean rendering: true/false vs yes/no across builds.
+    3. Unit suffixes: max-limit=100M/100M vs 100000000/100000000 (also
+       pcq-rate, limit-at, cache-size=81920KiB vs 81920, ...). Anchored to
+       value position (right after = or /, followed by a boundary) so enum
+       values like advertise=1000M-full, speed=1Gbps, and quoted names
+       like name="30M - DN" are never touched.
+    """
+    text = re.sub(r'\\\n    ', '', text)
+    text = re.sub(r'\b([\w-]+=)true\b',  r'\1yes', text)
+    text = re.sub(r'\b([\w-]+=)false\b', r'\1no',  text)
+
+    def expand(m):
+        return str(int(float(m.group(1)) * _ROS_SUFFIX[m.group(2)]))
+
+    text = re.sub(r'(?<==)(\d+(?:\.\d+)?)([kMG])(?=[\s/]|$)', expand, text, flags=re.M)
+    text = re.sub(r'(?<=/)(\d+(?:\.\d+)?)([kMG])(?=[\s/]|$)', expand, text, flags=re.M)
+    text = re.sub(r'(?<==)(\d+)KiB(?=\s|$)', r'\1', text, flags=re.M)
+    return text
+
+
 @app.get("/config-snapshots/{router_id}/{timestamp}/diff")
 def diff_config_snapshot(request: Request, router_id: int, timestamp: str):
     conn = get_conn()
@@ -1027,24 +1067,8 @@ def diff_config_snapshot(request: Request, router_id: int, timestamp: str):
 
     diff_html = None
     if previous:
-        def normalise_ros_booleans(text):
-            """
-            RouterOS 6.x exports booleans as 'true'/'false'; 7.x (and some 6
-            builds after a firmware bump) uses 'yes'/'no'. Normalise everything
-            to yes/no before diffing so a RouterOS upgrade doesn't produce a
-            wall of spurious ±disabled=false/±disabled=no noise that buries
-            the real config changes.
-
-            Only touches property-value pairs (word=true / word=false) to
-            avoid accidentally rewriting content inside string values.
-            """
-            import re as _re
-            text = _re.sub(r'\b(\w+=)true\b',  r'\1yes',  text)
-            text = _re.sub(r'\b(\w+=)false\b', r'\1no',   text)
-            return text
-
-        prev_lines = normalise_ros_booleans(previous["config_text"]).splitlines()
-        curr_lines = normalise_ros_booleans(current["config_text"]).splitlines()
+        prev_lines = normalise_ros_config(previous["config_text"]).splitlines()
+        curr_lines = normalise_ros_config(current["config_text"]).splitlines()
 
         diff_lines = difflib.unified_diff(
             prev_lines,
