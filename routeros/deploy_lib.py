@@ -24,35 +24,38 @@ _SSL_CTX.verify_mode = ssl.CERT_NONE
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 METRICS_V7_TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "qoe-push-metrics-v7.rsc")
 METRICS_V6_TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "qoe-push-metrics-v6.rsc")
-FIRMWARE_TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "qoe-push-firmware.rsc")
+FIRMWARE_V7_TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "qoe-push-firmware-v7.rsc")
+FIRMWARE_V6_TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "qoe-push-firmware-v6.rsc")
 BASELINE_V7_TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "qoe-baseline-hardening-v7.rsc")
 BASELINE_V6_TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "qoe-baseline-hardening-v6.rsc")
 
 
 def load_templates():
     """
-    Returns (metrics_templates, firmware_tpl, baseline_templates) where
-    metrics_templates/baseline_templates are {"v7": ..., "v6": ...} --
-    push_to_router picks between them based on the target router's actual
-    RouterOS major version (see routeros/README.md for why: `/ping ...
-    as-value` isn't parseable at all on at least one RouterOS 6.49.8
-    long-term build -- confirmed separately that the baseline script's
-    v7-only NTP syntax hits the exact same class of hard parse failure on
-    v6, hence its own v6/v7 split too).
+    Returns (metrics_templates, firmware_templates, baseline_templates),
+    each {"v7": ..., "v6": ...} -- push_to_router picks between them based
+    on the target router's actual RouterOS major version (see
+    routeros/README.md for why: `/ping ... as-value` isn't parseable at
+    all on at least one RouterOS 6.49.8 long-term build -- confirmed
+    separately that the baseline script's v7-only NTP syntax and the
+    firmware script's `:export show-sensitive` hit the exact same class
+    of hard parse failure on v6, hence every script now splits).
     """
     with open(METRICS_V7_TEMPLATE_PATH) as f:
         metrics_v7 = f.read()
     with open(METRICS_V6_TEMPLATE_PATH) as f:
         metrics_v6 = f.read()
-    with open(FIRMWARE_TEMPLATE_PATH) as f:
-        firmware_tpl = f.read()
+    with open(FIRMWARE_V7_TEMPLATE_PATH) as f:
+        firmware_v7 = f.read()
+    with open(FIRMWARE_V6_TEMPLATE_PATH) as f:
+        firmware_v6 = f.read()
     with open(BASELINE_V7_TEMPLATE_PATH) as f:
         baseline_v7 = f.read()
     with open(BASELINE_V6_TEMPLATE_PATH) as f:
         baseline_v6 = f.read()
     return (
         {"v7": metrics_v7, "v6": metrics_v6},
-        firmware_tpl,
+        {"v7": firmware_v7, "v6": firmware_v6},
         {"v7": baseline_v7, "v6": baseline_v6},
     )
 
@@ -210,7 +213,7 @@ def run_script(api, name):
 
 
 def push_to_router(
-    router, ingest_base_url, metrics_templates, firmware_tpl, sftp_config, syslog_config,
+    router, ingest_base_url, metrics_templates, firmware_templates, sftp_config, syslog_config,
     baseline_templates=None, radius_config=None, gmedia_cidrs=None,
 ):
     """
@@ -255,15 +258,6 @@ def push_to_router(
     wan_interface = router.get("wan_interface") or "ether1"
     wan_interface_backup = router.get("wan_interface_backup") or ""
 
-    firmware_src = render_script(firmware_tpl, {
-        '"https://monitor.yourisp.com/ingest/firmware"': f'"{ingest_base_url}/ingest/firmware"',
-        '"PER_ROUTER_AUTH_TOKEN"': f'"{token}"',
-        '"SFTP_HOST_PLACEHOLDER"': f'"{sftp_config["host"]}"',
-        '"SFTP_PORT_PLACEHOLDER"': f'"{sftp_config["port"]}"',
-        '"SFTP_USER_PLACEHOLDER"': f'"{sftp_config["user"]}"',
-        '"SFTP_PASSWORD_PLACEHOLDER"': f'"{sftp_config["password"]}"',
-    })
-
     connect_kwargs = {}
     if router.get("use_ssl"):
         connect_kwargs["ssl_wrapper"] = _SSL_CTX.wrap_socket
@@ -306,6 +300,20 @@ def push_to_router(
             '"PER_ROUTER_AUTH_TOKEN"': f'"{token}"',
             '"WAN_INTERFACE_PLACEHOLDER"': f'"{wan_interface}"',
             '"WAN_INTERFACE_BACKUP_PLACEHOLDER"': f'"{wan_interface_backup}"',
+        })
+
+        # Version-split like metrics/baseline: v7's `:export show-sensitive`
+        # is a hard parse failure on v6, which killed every v6 router's
+        # daily firmware push AND config snapshot when the flag shipped
+        # fleet-wide in one shared file (2026-07-11).
+        firmware_tpl = firmware_templates["v7"] if major_version >= 7 else firmware_templates["v6"]
+        firmware_src = render_script(firmware_tpl, {
+            '"https://monitor.yourisp.com/ingest/firmware"': f'"{ingest_base_url}/ingest/firmware"',
+            '"PER_ROUTER_AUTH_TOKEN"': f'"{token}"',
+            '"SFTP_HOST_PLACEHOLDER"': f'"{sftp_config["host"]}"',
+            '"SFTP_PORT_PLACEHOLDER"': f'"{sftp_config["port"]}"',
+            '"SFTP_USER_PLACEHOLDER"': f'"{sftp_config["user"]}"',
+            '"SFTP_PASSWORD_PLACEHOLDER"': f'"{sftp_config["password"]}"',
         })
 
         upsert_script(api, "qoe-push-metrics", metrics_src)

@@ -10,7 +10,8 @@ COPY admin-ui/ .
 COPY routeros/deploy_lib.py ./deploy_lib.py
 COPY routeros/qoe-push-metrics-v7.rsc ./qoe-push-metrics-v7.rsc
 COPY routeros/qoe-push-metrics-v6.rsc ./qoe-push-metrics-v6.rsc
-COPY routeros/qoe-push-firmware.rsc ./qoe-push-firmware.rsc
+COPY routeros/qoe-push-firmware-v7.rsc ./qoe-push-firmware-v7.rsc
+COPY routeros/qoe-push-firmware-v6.rsc ./qoe-push-firmware-v6.rsc
 COPY routeros/qoe-baseline-hardening-v7.rsc ./qoe-baseline-hardening-v7.rsc
 COPY routeros/qoe-baseline-hardening-v6.rsc ./qoe-baseline-hardening-v6.rsc
 # Shared PDF-report logic (also used by the reporter container).

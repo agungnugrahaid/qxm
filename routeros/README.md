@@ -8,7 +8,7 @@ There are two metrics script variants — `qoe-push-metrics-v7.rsc` (RouterOS v7
 
 For a fully manual install instead:
 
-1. Copy the variant matching the router's RouterOS major version, plus `qoe-push-firmware.rsc`, into RouterOS (`/import file=...` after uploading via Files, or paste directly into `/system script add`).
+1. Copy the variant matching the router's RouterOS major version, plus the matching `qoe-push-firmware-v7.rsc`/`-v6.rsc`, into RouterOS (`/import file=...` after uploading via Files, or paste directly into `/system script add`).
 2. Edit the `url` and `token` placeholders in both — the token must match a row you've created in the `routers` table.
 3. Schedule them:
 
@@ -65,7 +65,7 @@ Alongside the two IP-based ping targets (8.8.8.8, 1.1.1.1 -- which never touch D
 
 ## Daily config snapshot (over SFTP, not HTTP)
 
-`qoe-push-firmware.rsc` also runs `/export compact` daily and uploads the result via SFTP to the `sftp` service (see `docker-compose.yml` and `config-snapshot-watcher/`), which lands in `router_config_snapshots` and is browsable/diffable from admin-ui (`/config-snapshots/{router_id}`).
+`qoe-push-firmware-v7.rsc`/`-v6.rsc` also run `/export compact` daily and uploads the result via SFTP to the `sftp` service (see `docker-compose.yml` and `config-snapshot-watcher/`), which lands in `router_config_snapshots` and is browsable/diffable from admin-ui (`/config-snapshots/{router_id}`).
 
 Two things confirmed the hard way, worth knowing if this ever needs touching again:
 

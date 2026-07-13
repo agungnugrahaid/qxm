@@ -126,7 +126,7 @@ def warn_if_identity_has_spaces(identity):
 
 
 def main():
-    metrics_templates, firmware_tpl, baseline_templates = load_templates()
+    metrics_templates, firmware_templates, baseline_templates = load_templates()
     pg_conn = psycopg2.connect(DATABASE_URL)
 
     ok, failed = 0, 0
@@ -138,7 +138,7 @@ def main():
             try:
                 router = ensure_router_row(pg_conn, row, secrets.token_hex(24))
                 actual_identity, warnings = push_to_router(
-                    router, INGEST_BASE_URL, metrics_templates, firmware_tpl, SFTP_CONFIG, SYSLOG_CONFIG,
+                    router, INGEST_BASE_URL, metrics_templates, firmware_templates, SFTP_CONFIG, SYSLOG_CONFIG,
                     baseline_templates=baseline_templates, radius_config=RADIUS_CONFIG, gmedia_cidrs=GMEDIA_CIDRS,
                 )
                 for w in warnings:

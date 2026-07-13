@@ -189,7 +189,7 @@ def logout():
     return resp
 # -----------------------------------------------------------------------------
 
-METRICS_TEMPLATES, FIRMWARE_TPL, BASELINE_TEMPLATES = load_templates()
+METRICS_TEMPLATES, FIRMWARE_TEMPLATES, BASELINE_TEMPLATES = load_templates()
 
 
 def get_conn():
@@ -423,7 +423,7 @@ def deploy_and_record(router):
     cur = conn.cursor()
     try:
         actual_identity, warnings = push_to_router(
-            router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TPL, SFTP_CONFIG, SYSLOG_CONFIG,
+            router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TEMPLATES, SFTP_CONFIG, SYSLOG_CONFIG,
             baseline_templates=BASELINE_TEMPLATES, radius_config=RADIUS_CONFIG, gmedia_cidrs=GMEDIA_CIDRS,
         )
         renamed_to = sync_identity_name(router["id"], router["identity_name"], actual_identity)
@@ -539,20 +539,25 @@ def get_manual_script(request: Request, router_id: int):
         '"WAN_INTERFACE_BACKUP_PLACEHOLDER"', f'"{wan_interface_backup}"'
     )
 
-    # Compile the firmware script
-    firmware_src = FIRMWARE_TPL.replace(
-        '"https://monitor.yourisp.com/ingest/firmware"', f'"{firmware_url}"'
-    ).replace(
-        '"PER_ROUTER_AUTH_TOKEN"', f'"{token}"'
-    ).replace(
-        '"SFTP_HOST_PLACEHOLDER"', f'"{SFTP_CONFIG["host"]}"'
-    ).replace(
-        '"SFTP_PORT_PLACEHOLDER"', f'"{SFTP_CONFIG["port"]}"'
-    ).replace(
-        '"SFTP_USER_PLACEHOLDER"', f'"{SFTP_CONFIG["user"]}"'
-    ).replace(
-        '"SFTP_PASSWORD_PLACEHOLDER"', f'"{SFTP_CONFIG["password"]}"'
-    )
+    # Compile the firmware scripts (v6/v7 split: show-sensitive doesn't
+    # parse on RouterOS 6, same as the metrics scripts' split)
+    def _compile_firmware(tpl):
+        return tpl.replace(
+            '"https://monitor.yourisp.com/ingest/firmware"', f'"{firmware_url}"'
+        ).replace(
+            '"PER_ROUTER_AUTH_TOKEN"', f'"{token}"'
+        ).replace(
+            '"SFTP_HOST_PLACEHOLDER"', f'"{SFTP_CONFIG["host"]}"'
+        ).replace(
+            '"SFTP_PORT_PLACEHOLDER"', f'"{SFTP_CONFIG["port"]}"'
+        ).replace(
+            '"SFTP_USER_PLACEHOLDER"', f'"{SFTP_CONFIG["user"]}"'
+        ).replace(
+            '"SFTP_PASSWORD_PLACEHOLDER"', f'"{SFTP_CONFIG["password"]}"'
+        )
+
+    firmware_src_v7 = _compile_firmware(FIRMWARE_TEMPLATES["v7"])
+    firmware_src_v6 = _compile_firmware(FIRMWARE_TEMPLATES["v6"])
 
     # Use the pre-configured IP (SYSLOG_IP) for the copy-paste commands --
     # RouterOS 6.x rejects hostnames in the 'remote' field, so an IP is safer.
@@ -567,7 +572,8 @@ def get_manual_script(request: Request, router_id: int):
             "router": router,
             "metrics_src_v7": metrics_src_v7,
             "metrics_src_v6": metrics_src_v6,
-            "firmware_src": firmware_src,
+            "firmware_src_v7": firmware_src_v7,
+            "firmware_src_v6": firmware_src_v6,
             "syslog_host": syslog_host,
             "syslog_ip": syslog_ip,
             "syslog_port": syslog_port,

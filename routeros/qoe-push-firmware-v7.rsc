@@ -1,4 +1,12 @@
-# qoe-push-firmware.rsc
+# qoe-push-firmware-v7.rsc
+#
+# v7-only: `:export ... show-sensitive` does not PARSE on RouterOS 6 (the
+# v6 parser hard-fails on unknown parameters even in untaken branches,
+# same class of failure as the metrics/baseline scripts' splits) -- v6
+# routers get qoe-push-firmware-v6.rsc, which omits the flag because v6
+# exports sensitive values by default. Deployed fleet-wide 2026-07-11
+# without this split, every v6 router's daily job (firmware push AND
+# config snapshot) died at the parse stage for two days.
 #
 # Runs once a day via /system scheduler -- firmware rarely changes, so this
 # doesn't need the 5-minute cadence the metrics push uses. Also pushes a

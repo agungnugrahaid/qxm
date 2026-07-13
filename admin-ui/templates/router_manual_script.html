@@ -23,7 +23,8 @@
     style="display:flex; border-bottom:1px solid var(--outline-variant); margin-bottom: 1.5rem; gap: 0.5rem; overflow-x: auto;">
     <button class="btn tab-btn active" onclick="switchTab(event, 'metrics-v7-tab')">Metrics Script (v7+)</button>
     <button class="btn tab-btn" onclick="switchTab(event, 'metrics-v6-tab')">Metrics Script (v6)</button>
-    <button class="btn tab-btn" onclick="switchTab(event, 'firmware-tab')">Firmware Script</button>
+    <button class="btn tab-btn" onclick="switchTab(event, 'firmware-v7-tab')">Firmware Script (v7+)</button>
+    <button class="btn tab-btn" onclick="switchTab(event, 'firmware-v6-tab')">Firmware Script (v6)</button>
     <button class="btn tab-btn" onclick="switchTab(event, 'setup-commands-tab')">Scheduler & Syslog CLI</button>
   </div>
 
@@ -52,16 +53,28 @@
       style="white-space: pre-wrap; font-family:ui-monospace, monospace; font-size:0.75rem; background-color: var(--inverse-surface); color: var(--inverse-on-surface); padding: 1rem; border-radius: 4px; max-height: 450px; overflow: auto; outline:none;">{{ metrics_src_v6 }}</pre>
   </div>
 
-  <!-- Firmware -->
-  <div id="firmware-tab" class="tab-content" style="display:none;">
+  <!-- Firmware v7 -->
+  <div id="firmware-v7-tab" class="tab-content" style="display:none;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
-      <span style="font-weight:600; font-size:0.9rem;">Firmware & Backup script</span>
-      <button class="btn" onclick="copyText('firmware-src')">
+      <span style="font-weight:600; font-size:0.9rem;">Firmware & Backup script for RouterOS 7+</span>
+      <button class="btn" onclick="copyText('firmware-v7-src')">
         <i data-lucide="copy" style="width:14px; height:14px;"></i> Copy Script
       </button>
     </div>
-    <pre id="firmware-src" tabindex="0" class="diff"
-      style="white-space: pre-wrap; font-family:ui-monospace, monospace; font-size:0.75rem; background-color: var(--inverse-surface); color: var(--inverse-on-surface); padding: 1rem; border-radius: 4px; max-height: 450px; overflow: auto; outline:none;">{{ firmware_src }}</pre>
+    <pre id="firmware-v7-src" tabindex="0" class="diff"
+      style="white-space: pre-wrap; font-family:ui-monospace, monospace; font-size:0.75rem; background-color: var(--inverse-surface); color: var(--inverse-on-surface); padding: 1rem; border-radius: 4px; max-height: 450px; overflow: auto; outline:none;">{{ firmware_src_v7 }}</pre>
+  </div>
+
+  <!-- Firmware v6 -->
+  <div id="firmware-v6-tab" class="tab-content" style="display:none;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+      <span style="font-weight:600; font-size:0.9rem;">Firmware & Backup script for RouterOS 6 (show-sensitive doesn't parse on v6)</span>
+      <button class="btn" onclick="copyText('firmware-v6-src')">
+        <i data-lucide="copy" style="width:14px; height:14px;"></i> Copy Script
+      </button>
+    </div>
+    <pre id="firmware-v6-src" tabindex="0" class="diff"
+      style="white-space: pre-wrap; font-family:ui-monospace, monospace; font-size:0.75rem; background-color: var(--inverse-surface); color: var(--inverse-on-surface); padding: 1rem; border-radius: 4px; max-height: 450px; overflow: auto; outline:none;">{{ firmware_src_v6 }}</pre>
   </div>
 
   <!-- CLI commands -->
