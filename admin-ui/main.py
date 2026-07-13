@@ -193,7 +193,11 @@ METRICS_TEMPLATES, FIRMWARE_TEMPLATES, BASELINE_TEMPLATES = load_templates()
 
 
 def get_conn():
-    conn = psycopg2.connect(DATABASE_URL)
+    # Session timezone Asia/Jakarta: every timestamptz comes back rendered
+    # in WIB so pages match what the team's clocks say, while storage stays
+    # absolute UTC instants. isoformat() values carry the +07:00 offset, so
+    # snapshot links etc. round-trip through `WHERE time = %s` unchanged.
+    conn = psycopg2.connect(DATABASE_URL, options="-c timezone=Asia/Jakarta")
     conn.cursor_factory = psycopg2.extras.RealDictCursor
     return conn
 

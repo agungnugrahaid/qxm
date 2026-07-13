@@ -138,7 +138,7 @@
           if (r.last_deploy_status) {
             const deployClass = r.last_deploy_status === 'ok' ? 'result-ok' : 'result-fail';
             const deployIcon = r.last_deploy_status === 'ok' ? 'check' : 'x';
-            const cleanDate = r.last_deploy_at ? r.last_deploy_at.substring(0, 19).replace('T', ' ') : '';
+            const cleanDate = r.last_deploy_at ? r.last_deploy_at.substring(0, 19).replace('T', ' ') + ' WIB' : '';
             deployStatus = `
               <span class="${deployClass}" style="display:inline-flex; align-items:center; gap:0.25rem;">
                 <i data-lucide="${deployIcon}" style="width:14px; height:14px;"></i>
@@ -149,7 +149,7 @@
             `;
           }
 
-          const cleanLastSeen = r.last_seen_at ? r.last_seen_at.substring(0, 19).replace('T', ' ') : 'never';
+          const cleanLastSeen = r.last_seen_at ? r.last_seen_at.substring(0, 19).replace('T', ' ') + ' WIB' : 'never';
           
           const mgmtText = r.mgmt_host
             ? `${esc(r.mgmt_host)}:${r.mgmt_port}`

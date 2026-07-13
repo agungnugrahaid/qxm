@@ -82,7 +82,7 @@
             </td>
             <td>
               {% if r.last_seen_at %}
-                {{ r.last_seen_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}
+                {{ r.last_seen_at.strftime('%Y-%m-%d %H:%M:%S WIB') }}
               {% else %}
                 never
               {% endif %}
@@ -218,7 +218,7 @@
             <td style="font-weight: 600; color: var(--primary);">{{ s.site_desc }}</td>
             <td><code>{{ s.unifi_site_name }}</code></td>
             <td>{{ s.controller_name }}</td>
-            <td>{{ s.discovered_at.strftime('%Y-%m-%d %H:%M:%S UTC') if s.discovered_at else '—' }}</td>
+            <td>{{ s.discovered_at.strftime('%Y-%m-%d %H:%M:%S WIB') if s.discovered_at else '—' }}</td>
           </tr>
           {% endfor %}
         </tbody>
