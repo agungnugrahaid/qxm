@@ -25,12 +25,41 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 import psycopg2
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
 app = FastAPI(title="QoE Ingestion API")
+
+
+@app.exception_handler(RequestValidationError)
+async def log_validation_errors(request: Request, exc: RequestValidationError):
+    # A 422 means a router IS pushing but its payload no longer parses --
+    # the router then looks "offline" while the real cause (a field gone
+    # bad after an on-site change) is only in the response body the router
+    # discards. Log which router and which fields, so this failure mode is
+    # visible in `docker logs` instead of silent.
+    body = exc.body if isinstance(exc.body, dict) else {}
+    errors = jsonable_encoder(exc.errors())
+    # For malformed JSON (RouterOS scripts build payloads by string
+    # concatenation, so one weird value breaks the whole document), the
+    # error offset is meaningless without the surrounding raw bytes.
+    snippet = ""
+    if errors and errors[0].get("type") == "json_invalid":
+        raw = await request.body()  # cached by Starlette; safe to re-read here
+        pos = errors[0]["loc"][-1] if isinstance(errors[0]["loc"][-1], int) else 0
+        snippet = raw[max(0, pos - 120):pos + 40].decode(errors="replace")
+    print(
+        f"[validation-422] path={request.url.path} "
+        f"reported_router_id={body.get('router_id')!r} "
+        f"errors={errors[:5]} raw_context={snippet!r}",
+        flush=True,
+    )
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 
 class PingResult(BaseModel):
