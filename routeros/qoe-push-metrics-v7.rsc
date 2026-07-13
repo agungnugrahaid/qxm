@@ -211,6 +211,25 @@
 # confirmed present on both RouterOS 6 and 7 (v7 adds rx-error-events and
 # tx-drop-packet, v6 doesn't have them at all) so one script works on
 # both, matching every other block in this file.
+# RouterOS renders these stats counters with a space thousands separator
+# once they pass 999 ("1 881") -- interpolated raw into the concatenated
+# JSON, that space makes the whole payload invalid and the API rejects
+# the push with a 422 (found live: rx_fcs_error on a port with a failing
+# cable took a healthy router "offline" in QXM). Strip anything that
+# isn't a digit-safe character before embedding.
+:local numClean do={
+    :local s [:tostr $1]
+    :local out ""
+    :if ([:len $s] > 0) do={
+        :for i from=0 to=([:len $s] - 1) do={
+            :local ch [:pick $s $i ($i + 1)]
+            :if ($ch != " " and $ch != ",") do={ :set out ($out . $ch) }
+        }
+    }
+    :if ([:len $out] = 0) do={ :set out "0" }
+    :return $out
+}
+
 :local ifacesJson ""
 :foreach ifaceId in=[/interface ethernet find] do={
     :local ifName [/interface ethernet get $ifaceId name]
@@ -235,6 +254,14 @@
     :if ([:typeof $txCollision] = "nil") do={ :set txCollision 0 }
     :if ([:typeof $txLateCollision] = "nil") do={ :set txLateCollision 0 }
     :if ([:typeof $txUnderrun] = "nil") do={ :set txUnderrun 0 }
+
+    :set fcsErr [$numClean $fcsErr]
+    :set rxTooShort [$numClean $rxTooShort]
+    :set rxTooLong [$numClean $rxTooLong]
+    :set rxOverflow [$numClean $rxOverflow]
+    :set txCollision [$numClean $txCollision]
+    :set txLateCollision [$numClean $txLateCollision]
+    :set txUnderrun [$numClean $txUnderrun]
 
     :if ($ifacesJson != "") do={ :set ifacesJson ($ifacesJson . ",") }
     :set ifacesJson ($ifacesJson . "{\"interface\":\"$ifName\",\"running\":$ifRunning,\"disabled\":$ifDisabled," . \
