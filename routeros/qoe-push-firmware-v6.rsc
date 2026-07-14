@@ -77,9 +77,23 @@
 # ties the upload back to this specific router (matches the same
 # auth_token already used for the HTTP pushes above).
 :local exportFile ("qoe-config-" . $routerId)
-:export compact file=$exportFile
-:delay 2
 :local exportFileName ($exportFile . ".rsc")
+# Remove any leftover file from a previous run FIRST -- otherwise the
+# wait loop below sees the stale file instantly and uploads yesterday's
+# config instead of this run's.
+/file remove [find name=$exportFileName]
+:export compact file=$exportFile
+# /export can take well over 2 seconds on some boards (measured ~14s on
+# a RouterOS 7.8 hotel router with a 45KB config). A fixed :delay 2 made
+# the first run die at fetch with "no such file" (and later runs upload
+# the previous day's leftover). Poll for the file instead, then give it
+# one extra second to finish writing.
+:local waited 0
+:while ([:len [/file find name=$exportFileName]] = 0 and $waited < 30) do={
+    :delay 1
+    :set waited ($waited + 1)
+}
+:delay 1
 /tool fetch url=("sftp://" . $sftpUser . ":" . $sftpPassword . "@" . $sftpHost . ":" . $sftpPort . "/upload/" . $token . ".rsc") \
     src-path=$exportFileName upload=yes
 /file remove [find name=$exportFileName]
