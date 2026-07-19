@@ -186,7 +186,6 @@ class ServerTable {
     });
 
     fetch(`${this.apiUrl}?${params.toString()}`)
-      .parseJson = fetch(`${this.apiUrl}?${params.toString()}`)
       .then(res => res.json())
       .then(result => {
         this.render(result.data, result.total);

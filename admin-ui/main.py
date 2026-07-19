@@ -42,18 +42,18 @@ import secrets
 import threading
 import time
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import psycopg2
 import psycopg2.extras
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from dashboard_share import share_dashboard_for_customer, slugify
 from deploy_lib import load_templates, push_to_router
-from report_lib import generate_report
+from report_lib import WIB, generate_report
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 INGEST_BASE_URL = os.environ.get("INGEST_BASE_URL", "https://monitor.yourisp.com")
@@ -238,7 +238,7 @@ def api_routers(
     search: str = "",
     page: int = 1,
     per_page: int = 25,
-    sort_col: str = "identity_name",
+    sort_col: str = "customer_name",
     sort_dir: str = "asc"
 ):
     allowed_sort_cols = {
@@ -250,7 +250,7 @@ def api_routers(
         "last_seen": "r.last_seen_at",
         "last_deploy": "r.last_deploy_at"
     }
-    db_sort_col = allowed_sort_cols.get(sort_col, "r.identity_name")
+    db_sort_col = allowed_sort_cols.get(sort_col, "c.name")
     db_sort_dir = "ASC" if sort_dir.lower() == "asc" else "DESC"
 
     offset = (page - 1) * per_page
@@ -273,7 +273,7 @@ def api_routers(
                 FROM routers r
                 LEFT JOIN customers c ON c.id = r.customer_id
                 WHERE r.identity_name ILIKE %s OR c.name ILIKE %s OR r.mgmt_host ILIKE %s
-                ORDER BY {db_sort_col} {db_sort_dir}
+                ORDER BY {db_sort_col} {db_sort_dir}, r.identity_name ASC
                 LIMIT %s OFFSET %s
             """, (search_query, search_query, search_query, per_page, offset))
         else:
@@ -284,7 +284,7 @@ def api_routers(
                 SELECT r.*, c.name AS customer_name
                 FROM routers r
                 LEFT JOIN customers c ON c.id = r.customer_id
-                ORDER BY {db_sort_col} {db_sort_dir}
+                ORDER BY {db_sort_col} {db_sort_dir}, r.identity_name ASC
                 LIMIT %s OFFSET %s
             """, (per_page, offset))
 
@@ -303,14 +303,16 @@ def api_routers(
 
 
 @app.get("/routers/new")
-def new_router_form(request: Request):
+def new_router_form(request: Request, redirect_to: str = "/"):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT * FROM customers ORDER BY name")
     customers = cur.fetchall()
     conn.close()
     return templates.TemplateResponse(
-        "router_form.html", {"request": request, "router": None, "customers": customers}
+        "router_form.html",
+        {"request": request, "router": None, "customers": customers,
+         "redirect_to": _safe_next(redirect_to)}
     )
 
 
@@ -326,6 +328,7 @@ def create_router(
     wan_interface_backup: str = Form(""),
     use_ssl: bool = Form(False),
     priority: str = Form("standard"),
+    redirect_to: str = Form("/"),
 ):
     token = secrets.token_hex(24)
     mgmt_host_clean = mgmt_host.strip() if mgmt_host else None
@@ -341,11 +344,11 @@ def create_router(
     )
     conn.commit()
     conn.close()
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse(_safe_next(redirect_to), status_code=303)
 
 
 @app.get("/routers/{router_id}/edit")
-def edit_router_form(request: Request, router_id: int):
+def edit_router_form(request: Request, router_id: int, redirect_to: str = "/"):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT * FROM routers WHERE id = %s", (router_id,))
@@ -354,7 +357,9 @@ def edit_router_form(request: Request, router_id: int):
     customers = cur.fetchall()
     conn.close()
     return templates.TemplateResponse(
-        "router_form.html", {"request": request, "router": router, "customers": customers}
+        "router_form.html",
+        {"request": request, "router": router, "customers": customers,
+         "redirect_to": _safe_next(redirect_to)}
     )
 
 
@@ -371,6 +376,7 @@ def update_router(
     wan_interface_backup: str = Form(""),
     use_ssl: bool = Form(False),
     priority: str = Form("standard"),
+    redirect_to: str = Form("/"),
 ):
     mgmt_host_clean = mgmt_host.strip() if mgmt_host else None
     admin_user_clean = admin_user.strip() if admin_user else None
@@ -385,7 +391,7 @@ def update_router(
     )
     conn.commit()
     conn.close()
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse(_safe_next(redirect_to), status_code=303)
 
 
 def sync_identity_name(router_id, current_identity, actual_identity):
@@ -620,28 +626,78 @@ def deploy_all(priority: str = Form(None)):
 
 @app.get("/customers")
 def list_customers(request: Request):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT c.*, 
+    return templates.TemplateResponse("customers_list.html", {"request": request})
+
+
+@app.get("/api/customers")
+def api_customers(
+    search: str = "",
+    page: int = 1,
+    per_page: int = 25,
+    sort_col: str = "name",
+    sort_dir: str = "asc"
+):
+    allowed_sort_cols = {
+        "name": "c.name",
+        "address": "c.address",
+        "connected": "COALESCE(r.router_count, 0) + COALESCE(s.site_count, 0)",
+        "report_email": "c.report_email"
+    }
+    db_sort_col = allowed_sort_cols.get(sort_col, "c.name")
+    db_sort_dir = "ASC" if sort_dir.lower() == "asc" else "DESC"
+
+    base_query = """
+        SELECT c.*,
                COALESCE(r.router_count, 0) AS router_count,
                COALESCE(s.site_count, 0) AS site_count
         FROM customers c
         LEFT JOIN (
-            SELECT customer_id, COUNT(*) AS router_count 
-            FROM routers 
+            SELECT customer_id, COUNT(*) AS router_count
+            FROM routers
             GROUP BY customer_id
         ) r ON r.customer_id = c.id
         LEFT JOIN (
-            SELECT customer_id, COUNT(*) AS site_count 
-            FROM sites 
+            SELECT customer_id, COUNT(*) AS site_count
+            FROM sites
             GROUP BY customer_id
         ) s ON s.customer_id = c.id
-        ORDER BY c.name
-    """)
-    customers = cur.fetchall()
-    conn.close()
-    return templates.TemplateResponse("customers_list.html", {"request": request, "customers": customers})
+    """
+
+    offset = (page - 1) * per_page
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+
+        if search:
+            search_query = f"%{search}%"
+            cur.execute("""
+                SELECT COUNT(*) AS count
+                FROM customers c
+                WHERE c.name ILIKE %s OR c.address ILIKE %s OR c.report_email ILIKE %s
+            """, (search_query, search_query, search_query))
+            total = cur.fetchone()["count"]
+
+            cur.execute(f"""
+                {base_query}
+                WHERE c.name ILIKE %s OR c.address ILIKE %s OR c.report_email ILIKE %s
+                ORDER BY {db_sort_col} {db_sort_dir}, c.name ASC
+                LIMIT %s OFFSET %s
+            """, (search_query, search_query, search_query, per_page, offset))
+        else:
+            cur.execute("SELECT COUNT(*) AS count FROM customers")
+            total = cur.fetchone()["count"]
+
+            cur.execute(f"""
+                {base_query}
+                ORDER BY {db_sort_col} {db_sort_dir}, c.name ASC
+                LIMIT %s OFFSET %s
+            """, (per_page, offset))
+
+        customers = cur.fetchall()
+    finally:
+        conn.close()
+
+    return {"data": customers, "total": total}
 
 
 @app.get("/customers/new")
@@ -707,18 +763,244 @@ def show_customer_detail(request: Request, customer_id: int):
     """)
     unassigned_sites = cur.fetchall()
     
+    # SLA & tickets for the month picked in the card (default: previous
+    # month WIB -- the month a monthly report would be about).
+    sla_month = _parse_month(request.query_params.get("sla_month", ""))
+    if sla_month is None:
+        now_wib = datetime.now(WIB).date()
+        sla_month = (now_wib.replace(day=1) - timedelta(days=1)).replace(day=1)
+    cur.execute(
+        "SELECT id, service_id, service_name, node_count, sla_pct FROM customer_sla_services "
+        "WHERE customer_id = %s AND month = %s ORDER BY service_id",
+        (customer_id, sla_month),
+    )
+    sla_services = cur.fetchall()
+    next_month = (sla_month.replace(day=28) + timedelta(days=4)).replace(day=1)
+    cur.execute(
+        "SELECT id, ticket_no, tanggal, description, action, mttr_seconds, status FROM customer_tickets "
+        "WHERE customer_id = %s AND tanggal >= %s AND tanggal < %s ORDER BY tanggal, ticket_no",
+        (customer_id, sla_month, next_month),
+    )
+    sla_tickets = cur.fetchall()
+    for t in sla_tickets:
+        s = t["mttr_seconds"]
+        t["mttr_hms"] = f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}" if s is not None else ""
+
+    # Topology attachments -- metadata only, never pull the BYTEA into the
+    # page render (files are served by their own route below).
+    cur.execute(
+        "SELECT id, label, filename, content_type, size_bytes, uploaded_at "
+        "FROM customer_topology_files WHERE customer_id = %s ORDER BY uploaded_at DESC",
+        (customer_id,),
+    )
+    topology_files = cur.fetchall()
+
     conn.close()
-    
+
     return templates.TemplateResponse(
-        "customer_detail.html", 
+        "customer_detail.html",
         {
-            "request": request, 
-            "customer": customer, 
-            "routers": routers, 
+            "request": request,
+            "customer": customer,
+            "routers": routers,
             "sites": sites,
-            "unassigned_sites": unassigned_sites
+            "unassigned_sites": unassigned_sites,
+            "topology_files": topology_files,
+            "report_start_default": (datetime.now(WIB) - timedelta(days=30)).strftime("%Y-%m-%d"),
+            "report_end_default": datetime.now(WIB).strftime("%Y-%m-%d"),
+            "sla_month": sla_month.strftime("%Y-%m"),
+            "sla_services": sla_services,
+            "sla_tickets": sla_tickets
         }
     )
+
+
+# Topology attachments: PDFs/images of the customer's network diagram,
+# stored as BYTEA (they ride the nightly pg-backup). Whitelist maps each
+# accepted content-type to its expected filename extensions -- both must
+# agree, so neither a mislabeled upload nor a renamed one gets through.
+# No SVG: it can carry scripts and these files are served inline.
+TOPOLOGY_ALLOWED_TYPES = {
+    "application/pdf": {".pdf"},
+    "image/png": {".png"},
+    "image/jpeg": {".jpg", ".jpeg"},
+    "image/webp": {".webp"},
+}
+TOPOLOGY_MAX_BYTES = 16 * 1024 * 1024
+
+
+@app.post("/customers/{customer_id}/topology")
+async def upload_topology_file(customer_id: int, file: UploadFile = File(...), label: str = Form("")):
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    allowed_exts = TOPOLOGY_ALLOWED_TYPES.get(file.content_type)
+    if not allowed_exts or ext not in allowed_exts:
+        return RedirectResponse(f"/customers/{customer_id}?error=topology_type", status_code=303)
+    data = await file.read()
+    if not data:
+        return RedirectResponse(f"/customers/{customer_id}?error=topology_type", status_code=303)
+    if len(data) > TOPOLOGY_MAX_BYTES:
+        return RedirectResponse(f"/customers/{customer_id}?error=topology_size", status_code=303)
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO customer_topology_files "
+        "(customer_id, label, filename, content_type, size_bytes, data) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (customer_id, label.strip() or None, file.filename, file.content_type, len(data), data),
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse(f"/customers/{customer_id}", status_code=303)
+
+
+@app.get("/customers/{customer_id}/topology/{file_id}")
+def get_topology_file(customer_id: int, file_id: int, download: int = 0):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT filename, content_type, data FROM customer_topology_files "
+        "WHERE id = %s AND customer_id = %s",
+        (file_id, customer_id),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return RedirectResponse(f"/customers/{customer_id}", status_code=303)
+    # Headers are latin-1; fold the filename to ASCII so an exotic upload
+    # name can't break the response.
+    safe_name = (row["filename"] or "").encode("ascii", "ignore").decode().replace('"', "") or "topology"
+    disposition = "attachment" if download else "inline"
+    return Response(
+        content=bytes(row["data"]),
+        media_type=row["content_type"],
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{safe_name}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+# --- Manual SLA / ticket entry (interim source until the ERP API exists;
+# see ERP_SLA_API.md -- the field names deliberately match that contract).
+
+def _parse_month(value):
+    """'YYYY-MM' -> first-of-month date, or None."""
+    try:
+        return datetime.strptime(value, "%Y-%m").date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_mttr(value):
+    """'hh:mm:ss' or 'mm:ss' or plain minutes -> seconds, or None."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        parts = [int(p) for p in value.split(":")]
+    except ValueError:
+        return None
+    if len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    if len(parts) == 2:
+        return parts[0] * 60 + parts[1]
+    if len(parts) == 1:
+        return parts[0] * 60  # bare number = minutes
+    return None
+
+
+@app.post("/customers/{customer_id}/sla-services")
+def upsert_sla_service(
+    customer_id: int,
+    month: str = Form(...),
+    service_id: str = Form(...),
+    service_name: str = Form(...),
+    node_count: int = Form(1),
+    sla_pct: float = Form(...),
+):
+    month_date = _parse_month(month)
+    if month_date is None or not service_id.strip() or not (0 <= sla_pct <= 100):
+        return RedirectResponse(f"/customers/{customer_id}?sla_month={month}&error=sla_input#sla", status_code=303)
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO customer_sla_services (customer_id, month, service_id, service_name, node_count, sla_pct)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (customer_id, month, service_id)
+        DO UPDATE SET service_name = EXCLUDED.service_name,
+                      node_count = EXCLUDED.node_count,
+                      sla_pct = EXCLUDED.sla_pct
+        """,
+        (customer_id, month_date, service_id.strip(), service_name.strip(), node_count, sla_pct),
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse(f"/customers/{customer_id}?sla_month={month}#sla", status_code=303)
+
+
+@app.post("/customers/{customer_id}/sla-services/{row_id}/delete")
+def delete_sla_service(customer_id: int, row_id: int, sla_month: str = Form("")):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM customer_sla_services WHERE id = %s AND customer_id = %s", (row_id, customer_id))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(f"/customers/{customer_id}?sla_month={sla_month}#sla", status_code=303)
+
+
+@app.post("/customers/{customer_id}/tickets")
+def create_ticket(
+    customer_id: int,
+    sla_month: str = Form(""),
+    ticket_no: str = Form(...),
+    tanggal: str = Form(...),
+    description: str = Form(""),
+    action: str = Form(""),
+    mttr: str = Form(""),
+    status: str = Form("closed"),
+):
+    try:
+        tanggal_date = datetime.strptime(tanggal, "%Y-%m-%d").date()
+    except ValueError:
+        return RedirectResponse(f"/customers/{customer_id}?sla_month={sla_month}&error=sla_input#sla", status_code=303)
+    if not ticket_no.strip():
+        return RedirectResponse(f"/customers/{customer_id}?sla_month={sla_month}&error=sla_input#sla", status_code=303)
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO customer_tickets (customer_id, ticket_no, tanggal, description, action, mttr_seconds, status) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        (customer_id, ticket_no.strip(), tanggal_date, description.strip() or None,
+         action.strip() or None, _parse_mttr(mttr), status.strip() or "closed"),
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse(f"/customers/{customer_id}?sla_month={sla_month}#sla", status_code=303)
+
+
+@app.post("/customers/{customer_id}/tickets/{row_id}/delete")
+def delete_ticket(customer_id: int, row_id: int, sla_month: str = Form("")):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM customer_tickets WHERE id = %s AND customer_id = %s", (row_id, customer_id))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(f"/customers/{customer_id}?sla_month={sla_month}#sla", status_code=303)
+
+
+@app.post("/customers/{customer_id}/topology/{file_id}/delete")
+def delete_topology_file(customer_id: int, file_id: int):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM customer_topology_files WHERE id = %s AND customer_id = %s",
+        (file_id, customer_id),
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse(f"/customers/{customer_id}", status_code=303)
 
 
 @app.get("/customers/{customer_id}/edit")
@@ -796,14 +1078,34 @@ def share_dashboard(request: Request, customer_id: int):
 
 
 @app.get("/customers/{customer_id}/report")
-def download_report(customer_id: int, days: int = 30):
+def download_report(customer_id: int, days: int = 30, start: str = "", end: str = ""):
     """
     Generates the customer's QoE PDF on demand. Synchronous by design --
     ~6 panel renders at 1-3s each is an acceptable wait for a click, and
     the browser shows its own loading state.
+
+    Period: explicit ?start=YYYY-MM-DD&end=YYYY-MM-DD (interpreted as
+    whole WIB days, inclusive) wins over ?days=N (trailing window,
+    default 30 -- the customers-list button and back-compat path).
     """
-    customer_name, pdf_bytes = generate_report(customer_id, days=days)
-    filename = f"qoe-report-{slugify(customer_name)}-{datetime.now(timezone.utc).strftime('%Y%m%d')}.pdf"
+    start_dt = end_dt = None
+    if start and end:
+        try:
+            start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=WIB)
+            # inclusive end date -> exclusive next-midnight bound
+            end_dt = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=WIB) + timedelta(days=1)
+        except ValueError:
+            return RedirectResponse(f"/customers/{customer_id}?error=report_range", status_code=303)
+        end_dt = min(end_dt, datetime.now(WIB))
+        if start_dt >= end_dt or (end_dt - start_dt).days > 366:
+            return RedirectResponse(f"/customers/{customer_id}?error=report_range", status_code=303)
+
+    customer_name, pdf_bytes = generate_report(customer_id, days=days, start=start_dt, end=end_dt)
+    if start_dt is not None:
+        period_tag = f"{start.replace('-', '')}-{end.replace('-', '')}"
+    else:
+        period_tag = datetime.now(timezone.utc).strftime("%Y%m%d")
+    filename = f"qoe-report-{slugify(customer_name)}-{period_tag}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

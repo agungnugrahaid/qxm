@@ -5,6 +5,7 @@
 {% block content %}
   <div class="card" style="max-width: 800px;">
     <form method="post" action="{{ '/routers/' ~ router.id ~ '/edit' if router else '/routers/new' }}">
+      <input type="hidden" name="redirect_to" value="{{ redirect_to or '/' }}">
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
         <div class="field">
           <label>Identity name</label>
@@ -90,7 +91,7 @@
           <i data-lucide="save" style="width:16px; height:16px;"></i>
           Save Router
         </button>
-        <a class="btn" href="/">
+        <a class="btn" href="{{ redirect_to or '/' }}">
           <i data-lucide="x" style="width:16px; height:16px;"></i>
           Cancel
         </a>

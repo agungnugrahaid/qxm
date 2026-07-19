@@ -4,6 +4,8 @@
 {% block page_title %}Customers{% endblock %}
 
 {% block content %}
+  <script src="/static/server_table.js"></script>
+
   {% if request.query_params.get("error") == "cannot_delete_active" %}
     <div class="info-notification warning" style="margin-bottom: 1.5rem; border-left: 4px solid var(--terracotta); background: #fee2e2; color: var(--terracotta);">
       <i data-lucide="alert-triangle" style="width:16px; height:16px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--terracotta);"></i>
@@ -23,8 +25,7 @@
 
   <!-- Customers List Card -->
   <div class="card">
-    <div class="datatable-container">
-      <table id="customers-table" style="width: 100%; table-layout: auto;">
+    <table id="customers-table" style="width: 100%; table-layout: auto;">
       <thead>
         <tr>
           <th>Name</th>
@@ -35,60 +36,78 @@
         </tr>
       </thead>
       <tbody>
-        {% for c in customers %}
-        <tr>
-          <td style="font-weight: 600; color: var(--primary);">
-            <a href="/customers/{{ c.id }}" style="text-decoration: none; color: var(--primary); font-weight: 600;">{{ c.name }}</a>
-          </td>
-          <td>{{ c.address or "—" }}</td>
-          <td style="text-align: center;">
-            <div style="display: inline-flex; align-items: center; gap: 0.5rem; justify-content: center; background: var(--surface-variant); padding: 0.25rem 0.6rem; border-radius: 6px; font-size: 0.85rem; font-weight: 500;">
-              <span style="display: inline-flex; align-items: center; gap: 0.15rem;" title="Routers">
-                {{ c.router_count }} <i data-lucide="router" style="width:13px; height:13px; color: var(--secondary);"></i>
-              </span>
-              <span style="color: var(--on-surface-variant); font-size: 0.8rem;">/</span>
-              <span style="display: inline-flex; align-items: center; gap: 0.15rem;" title="Sites">
-                {{ c.site_count }} <i data-lucide="wifi" style="width:13px; height:13px; color: var(--success);"></i>
-              </span>
-            </div>
-          </td>
-          <td>
-            <form class="inline" method="post" action="/customers/{{ c.id }}/report-email" style="display:flex; gap:0.4rem; max-width: 320px;">
-              <input name="report_email" type="email" placeholder="not emailed" value="{{ c.report_email or '' }}" style="width: 14rem; padding: 0.35rem 0.5rem; font-size:0.85rem;">
-              <button class="btn" type="submit" style="padding: 0.35rem 0.75rem; font-size:0.85rem;">
-                <i data-lucide="check" style="width:14px; height:14px; color:var(--success);"></i>
-                Save
-              </button>
-            </form>
-          </td>
-          <td>
-            <div class="inline-actions">
-              <a class="btn" href="/customers/{{ c.id }}/edit" title="Edit customer settings">
-                <i data-lucide="edit-3" style="width:14px; height:14px;"></i>
-                <span class="btn-text">Edit</span>
-              </a>
-              <form class="inline" method="post" action="/customers/{{ c.id }}/share-dashboard">
-                <button class="btn" type="submit" title="Generate Grafana shareable link">
-                  <i data-lucide="share-2" style="width:14px; height:14px; color:var(--secondary);"></i>
-                  <span class="btn-text">Share</span>
-                </button>
-              </form>
-              <a class="btn" href="/customers/{{ c.id }}/report" title="Download monthly network quality PDF report">
-                <i data-lucide="file-text" style="width:14px; height:14px;"></i>
-                <span class="btn-text">PDF Report</span>
-              </a>
-              <form class="inline" method="post" action="/customers/{{ c.id }}/delete" onsubmit="return confirm('Are you sure you want to delete this customer?');">
-                <button class="btn" type="submit" style="color:var(--terracotta);" title="Delete customer profile">
-                  <i data-lucide="trash-2" style="width:14px; height:14px;"></i>
-                  <span class="btn-text">Delete</span>
-                </button>
-              </form>
-            </div>
-          </td>
-        </tr>
-        {% endfor %}
+        <!-- Populated via AJAX -->
       </tbody>
     </table>
-    </div>
   </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      new ServerTable({
+        tableSelector: "#customers-table",
+        apiUrl: "/api/customers",
+        defaultSortCol: "name",
+        defaultSortDir: "asc",
+        headers: [
+          "name",         // index 0
+          "address",      // index 1
+          "connected",    // index 2
+          "report_email", // index 3
+          null            // Actions column (not sortable)
+        ],
+        rowRenderer: function(c) {
+          return `
+            <td style="font-weight: 600; color: var(--primary);">
+              <a href="/customers/${c.id}" style="text-decoration: none; color: var(--primary); font-weight: 600;">${esc(c.name)}</a>
+            </td>
+            <td>${esc(c.address) || '—'}</td>
+            <td style="text-align: center;">
+              <div style="display: inline-flex; align-items: center; gap: 0.5rem; justify-content: center; background: var(--surface-variant); padding: 0.25rem 0.6rem; border-radius: 6px; font-size: 0.85rem; font-weight: 500;">
+                <span style="display: inline-flex; align-items: center; gap: 0.15rem;" title="Routers">
+                  ${c.router_count} <i data-lucide="router" style="width:13px; height:13px; color: var(--secondary);"></i>
+                </span>
+                <span style="color: var(--on-surface-variant); font-size: 0.8rem;">/</span>
+                <span style="display: inline-flex; align-items: center; gap: 0.15rem;" title="Sites">
+                  ${c.site_count} <i data-lucide="wifi" style="width:13px; height:13px; color: var(--success);"></i>
+                </span>
+              </div>
+            </td>
+            <td>
+              <form class="inline" method="post" action="/customers/${c.id}/report-email" style="display:flex; gap:0.4rem; max-width: 320px;">
+                <input name="report_email" type="email" placeholder="not emailed" value="${esc(c.report_email)}" style="width: 14rem; padding: 0.35rem 0.5rem; font-size:0.85rem;">
+                <button class="btn" type="submit" style="padding: 0.35rem 0.75rem; font-size:0.85rem;">
+                  <i data-lucide="check" style="width:14px; height:14px; color:var(--success);"></i>
+                  Save
+                </button>
+              </form>
+            </td>
+            <td>
+              <div class="inline-actions">
+                <a class="btn" href="/customers/${c.id}/edit" title="Edit customer settings">
+                  <i data-lucide="edit-3" style="width:14px; height:14px;"></i>
+                  <span class="btn-text">Edit</span>
+                </a>
+                <form class="inline" method="post" action="/customers/${c.id}/share-dashboard">
+                  <button class="btn" type="submit" title="Generate Grafana shareable link">
+                    <i data-lucide="share-2" style="width:14px; height:14px; color:var(--secondary);"></i>
+                    <span class="btn-text">Share</span>
+                  </button>
+                </form>
+                <a class="btn" href="/customers/${c.id}/report" title="Download monthly network quality PDF report">
+                  <i data-lucide="file-text" style="width:14px; height:14px;"></i>
+                  <span class="btn-text">PDF Report</span>
+                </a>
+                <form class="inline" method="post" action="/customers/${c.id}/delete" onsubmit="return confirm('Are you sure you want to delete this customer?');">
+                  <button class="btn" type="submit" style="color:var(--terracotta);" title="Delete customer profile">
+                    <i data-lucide="trash-2" style="width:14px; height:14px;"></i>
+                    <span class="btn-text">Delete</span>
+                  </button>
+                </form>
+              </div>
+            </td>
+          `;
+        }
+      });
+    });
+  </script>
 {% endblock %}

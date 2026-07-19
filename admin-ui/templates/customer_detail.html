@@ -36,6 +36,245 @@
     </div>
   </div>
 
+  <!-- Network Topology -->
+  <div class="card" style="margin-bottom: 1.5rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+      <h2 style="font-size: 1.25rem; margin: 0; display: flex; align-items: center;">
+        <i data-lucide="network" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--primary);"></i>
+        Network Topology ({{ topology_files|length }})
+      </h2>
+      <form class="inline" method="post" action="/customers/{{ customer.id }}/topology" enctype="multipart/form-data" style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin: 0;">
+        <input type="text" name="label" placeholder="Label (optional)" style="height: 36px; padding: 0 0.75rem; font-size: 0.875rem; width: 170px;">
+        <label class="btn" style="cursor: pointer; position: relative; white-space: nowrap; margin: 0;">
+          <i data-lucide="paperclip" style="width:14px; height:14px;"></i>
+          <span id="topology-file-label">Choose file&hellip;</span>
+          <input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp" required
+                 style="position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; padding: 0;"
+                 onchange="document.getElementById('topology-file-label').textContent = this.files.length ? this.files[0].name : 'Choose file…';">
+        </label>
+        <button type="submit" class="btn primary" style="white-space: nowrap;">
+          <i data-lucide="upload" style="width:14px; height:14px;"></i> Upload
+        </button>
+      </form>
+    </div>
+
+    {% if request.query_params.get("error") == "topology_type" %}
+      <div class="info-notification warning" style="margin-bottom: 1rem; border-left: 4px solid var(--terracotta); background: #fee2e2; color: var(--terracotta);">
+        <strong>Upload rejected:</strong> only PDF, PNG, JPEG, or WebP files are accepted (and the file extension must match its type).
+      </div>
+    {% elif request.query_params.get("error") == "topology_size" %}
+      <div class="info-notification warning" style="margin-bottom: 1rem; border-left: 4px solid var(--terracotta); background: #fee2e2; color: var(--terracotta);">
+        <strong>Upload rejected:</strong> file is larger than the 16 MB limit.
+      </div>
+    {% endif %}
+
+    {% if topology_files %}
+      <table style="width: 100%;">
+        <thead>
+          <tr>
+            <th style="width: 40%;">File</th>
+            <th style="width: 8%;">Type</th>
+            <th style="width: 10%;">Size</th>
+            <th style="width: 20%;">Uploaded</th>
+            <th style="width: 22%;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in topology_files %}
+          <tr>
+            <td>
+              <span style="font-weight: 600; color: var(--primary);">{{ f.label or f.filename }}</span>
+              {% if f.label and f.label != f.filename %}
+                <small style="display: block; color: var(--on-surface-variant); font-size: 0.75rem; margin-top: 0.15rem;">{{ f.filename }}</small>
+              {% endif %}
+            </td>
+            <td>
+              {% if f.content_type == 'application/pdf' %}
+                <span class="badge standard">PDF</span>
+              {% else %}
+                <span class="badge standard">Image</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if f.size_bytes < 1048576 %}
+                {{ (f.size_bytes / 1024) | round | int }} KB
+              {% else %}
+                {{ (f.size_bytes / 1048576) | round(1) }} MB
+              {% endif %}
+            </td>
+            <td>{{ f.uploaded_at.strftime('%Y-%m-%d %H:%M:%S WIB') }}</td>
+            <td>
+              <div class="inline-actions">
+                <a class="btn" href="/customers/{{ customer.id }}/topology/{{ f.id }}" target="_blank" title="View in a new tab">
+                  <i data-lucide="eye" style="width:14px; height:14px;"></i>
+                  <span class="btn-text">View</span>
+                </a>
+                <a class="btn" href="/customers/{{ customer.id }}/topology/{{ f.id }}?download=1" title="Download file">
+                  <i data-lucide="download" style="width:14px; height:14px;"></i>
+                  <span class="btn-text">Download</span>
+                </a>
+                <form class="inline" method="post" action="/customers/{{ customer.id }}/topology/{{ f.id }}/delete" onsubmit="return confirm('Delete this topology file?');">
+                  <button class="btn" type="submit" style="color:var(--terracotta);" title="Delete file">
+                    <i data-lucide="trash-2" style="width:14px; height:14px;"></i>
+                    <span class="btn-text">Delete</span>
+                  </button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      {% set latest = topology_files[0] %}
+      <div style="margin-top: 1rem; border-top: 1px solid var(--outline-variant); padding-top: 1rem;">
+        <strong style="display: block; font-size: 0.85rem; color: var(--on-surface-variant); margin-bottom: 0.5rem;">
+          Latest: {{ latest.label or latest.filename }}
+        </strong>
+        {% if latest.content_type == 'application/pdf' %}
+          <embed src="/customers/{{ customer.id }}/topology/{{ latest.id }}" type="application/pdf" style="width: 100%; height: 480px; border: 1px solid var(--outline-variant); border-radius: 8px;">
+        {% else %}
+          <a href="/customers/{{ customer.id }}/topology/{{ latest.id }}" target="_blank">
+            <img src="/customers/{{ customer.id }}/topology/{{ latest.id }}" alt="{{ latest.label or latest.filename }}" style="max-width: 100%; border: 1px solid var(--outline-variant); border-radius: 8px;">
+          </a>
+        {% endif %}
+      </div>
+    {% else %}
+      <p style="color: var(--on-surface-variant);">No topology files uploaded.</p>
+    {% endif %}
+  </div>
+
+  <!-- Export PDF Report -->
+  <div class="card" style="margin-bottom: 1.5rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+      <h2 style="font-size: 1.25rem; margin: 0; display: flex; align-items: center;">
+        <i data-lucide="file-text" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--primary);"></i>
+        Export PDF Report
+      </h2>
+      <form class="inline" method="get" action="/customers/{{ customer.id }}/report" style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin: 0;">
+        <input type="date" name="start" value="{{ report_start_default }}" required style="height: 36px; padding: 0 0.5rem; font-size: 0.875rem; width: 160px;">
+        <span style="color: var(--on-surface-variant);">&ndash;</span>
+        <input type="date" name="end" value="{{ report_end_default }}" required style="height: 36px; padding: 0 0.5rem; font-size: 0.875rem; width: 160px;">
+        <button type="submit" class="btn primary" style="white-space: nowrap;">
+          <i data-lucide="download" style="width:14px; height:14px;"></i> Download
+        </button>
+      </form>
+    </div>
+    {% if request.query_params.get("error") == "report_range" %}
+      <div class="info-notification warning" style="margin-bottom: 1rem; border-left: 4px solid var(--terracotta); background: #fee2e2; color: var(--terracotta);">
+        <strong>Invalid period:</strong> pick a start date on or before the end date, no more than a year apart (end date can't be in the future).
+      </div>
+    {% endif %}
+    <p style="color: var(--on-surface-variant); margin: 0; font-size: 0.9rem;">
+      Network quality report (traffic, latency &amp; packet loss graphs, Wi-Fi trends, full AP list) for the picked period &mdash; defaults to the last 30 days. Dates are whole days in WIB.
+    </p>
+  </div>
+
+  <!-- SLA & Tickets (manual entry until the ERP API exists) -->
+  <div class="card" style="margin-bottom: 1.5rem;" id="sla">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+      <h2 style="font-size: 1.25rem; margin: 0; display: flex; align-items: center;">
+        <i data-lucide="shield-check" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--primary);"></i>
+        SLA &amp; Tickets
+      </h2>
+      <form class="inline" method="get" action="/customers/{{ customer.id }}#sla" style="display:flex; gap:0.5rem; align-items:center; margin:0;">
+        <input type="month" name="sla_month" value="{{ sla_month }}" style="height: 36px; padding: 0 0.5rem; font-size: 0.875rem; width: 170px;"
+               onchange="this.form.submit()">
+      </form>
+    </div>
+
+    {% if request.query_params.get("error") == "sla_input" %}
+      <div class="info-notification warning" style="margin-bottom: 1rem; border-left: 4px solid var(--terracotta); background: #fee2e2; color: var(--terracotta);">
+        <strong>Entry rejected:</strong> check the fields — SLA % must be 0–100, dates valid, IDs non-empty.
+      </div>
+    {% endif %}
+
+    <p style="font-size: 0.8rem; color: var(--on-surface-variant); margin: 0 0 0.75rem;">
+      Manual entry, per month — feeds the SLA pages of the Monthly Report PDF. Will be replaced by the ERP API (see ERP_SLA_API.md).
+    </p>
+
+    <strong style="display:block; font-size: 0.85rem; color: var(--on-surface-variant); margin-bottom: 0.4rem;">Services &mdash; {{ sla_month }}</strong>
+    <table style="width: 100%; margin-bottom: 0.75rem;">
+      <thead>
+        <tr><th>Service ID</th><th>Service name</th><th style="width:9%;">Nodes</th><th style="width:12%;">SLA %</th><th style="width:12%;"></th></tr>
+      </thead>
+      <tbody>
+        {% for s in sla_services %}
+        <tr>
+          <td><code>{{ s.service_id }}</code></td>
+          <td>{{ s.service_name }}</td>
+          <td>{{ s.node_count }}</td>
+          <td style="font-weight:600;">{{ s.sla_pct }}</td>
+          <td>
+            <form class="inline" method="post" action="/customers/{{ customer.id }}/sla-services/{{ s.id }}/delete">
+              <input type="hidden" name="sla_month" value="{{ sla_month }}">
+              <button class="btn" type="submit" style="color:var(--terracotta); padding: 0.2rem 0.5rem;" title="Delete row">
+                <i data-lucide="trash-2" style="width:13px; height:13px;"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" style="color: var(--on-surface-variant); font-style: italic;">No services entered for this month.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <form class="inline" method="post" action="/customers/{{ customer.id }}/sla-services" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin-bottom: 1.25rem;">
+      <input type="hidden" name="month" value="{{ sla_month }}">
+      <input name="service_id" placeholder="Service ID" required style="width: 130px; height: 36px; padding: 0 0.5rem; font-size: 0.85rem;">
+      <input name="service_name" placeholder="Service name" required style="width: 200px; height: 36px; padding: 0 0.5rem; font-size: 0.85rem;">
+      <input name="node_count" type="number" value="1" min="1" title="Nodes" style="width: 70px; height: 36px; padding: 0 0.5rem; font-size: 0.85rem;">
+      <input name="sla_pct" type="number" step="0.001" min="0" max="100" placeholder="SLA %" required style="width: 100px; height: 36px; padding: 0 0.5rem; font-size: 0.85rem;">
+      <button type="submit" class="btn" style="white-space: nowrap;">
+        <i data-lucide="plus" style="width:14px; height:14px;"></i> Add / update
+      </button>
+    </form>
+
+    <strong style="display:block; font-size: 0.85rem; color: var(--on-surface-variant); margin-bottom: 0.4rem;">Tickets &mdash; {{ sla_month }}</strong>
+    <table style="width: 100%; margin-bottom: 0.75rem;">
+      <thead>
+        <tr><th>Ticket</th><th>Tanggal</th><th>Description</th><th>Action</th><th style="width:10%;">MTTR</th><th style="width:9%;">Status</th><th style="width:9%;"></th></tr>
+      </thead>
+      <tbody>
+        {% for t in sla_tickets %}
+        <tr>
+          <td><code>{{ t.ticket_no }}</code></td>
+          <td>{{ t.tanggal.strftime('%Y-%m-%d') }}</td>
+          <td>{{ t.description or "—" }}</td>
+          <td>{{ t.action or "—" }}</td>
+          <td>{{ t.mttr_hms or "—" }}</td>
+          <td>{{ t.status }}</td>
+          <td>
+            <form class="inline" method="post" action="/customers/{{ customer.id }}/tickets/{{ t.id }}/delete">
+              <input type="hidden" name="sla_month" value="{{ sla_month }}">
+              <button class="btn" type="submit" style="color:var(--terracotta); padding: 0.2rem 0.5rem;" title="Delete ticket">
+                <i data-lucide="trash-2" style="width:13px; height:13px;"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" style="color: var(--on-surface-variant); font-style: italic;">No tickets recorded this month.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <form class="inline" method="post" action="/customers/{{ customer.id }}/tickets" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+      <input type="hidden" name="sla_month" value="{{ sla_month }}">
+      <input name="ticket_no" placeholder="Ticket #" required style="width: 110px; height: 36px; padding: 0 0.5rem; font-size: 0.85rem;">
+      <input name="tanggal" type="date" required style="width: 150px; height: 36px; padding: 0 0.5rem; font-size: 0.85rem;">
+      <input name="description" placeholder="Description" style="width: 190px; height: 36px; padding: 0 0.5rem; font-size: 0.85rem;">
+      <input name="action" placeholder="Action" style="width: 150px; height: 36px; padding: 0 0.5rem; font-size: 0.85rem;">
+      <input name="mttr" placeholder="MTTR hh:mm:ss" style="width: 120px; height: 36px; padding: 0 0.5rem; font-size: 0.85rem;">
+      <select name="status" style="width: 100px; height: 36px; padding: 0 0.5rem; font-size: 0.85rem;">
+        <option value="closed">closed</option>
+        <option value="open">open</option>
+      </select>
+      <button type="submit" class="btn" style="white-space: nowrap;">
+        <i data-lucide="plus" style="width:14px; height:14px;"></i> Add ticket
+      </button>
+    </form>
+  </div>
+
   <!-- Connected Routers -->
   <div class="card" style="margin-bottom: 1.5rem;">
     <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem;">
@@ -43,7 +282,7 @@
         <i data-lucide="router" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--primary);"></i>
         Connected Routers ({{ routers|length }})
       </h2>
-      <a class="btn primary" href="/routers/new?customer_id={{ customer.id }}" style="height:32px; font-size:0.8rem;">
+      <a class="btn primary" href="/routers/new?customer_id={{ customer.id }}&redirect_to=/customers/{{ customer.id }}" style="height:32px; font-size:0.8rem;">
         <i data-lucide="plus" style="width:14px; height:14px;"></i>
         Add Router
       </a>
@@ -89,7 +328,7 @@
             </td>
             <td>
               <div style="display: flex; gap: 0.5rem;">
-                <a class="btn" href="/routers/{{ r.id }}/edit">Configure</a>
+                <a class="btn" href="/routers/{{ r.id }}/edit?redirect_to=/customers/{{ customer.id }}">Configure</a>
                 <a class="btn" href="/routers/{{ r.id }}/manual-script">Script</a>
               </div>
             </td>

@@ -92,8 +92,8 @@
     <table id="routers-table">
       <thead>
         <tr>
-          <th style="width: 13%;">Identity</th>
           <th style="width: 11%;">Customer</th>
+          <th style="width: 13%;">Identity</th>
           <th style="width: 13%;">Mgmt host</th>
           <th style="width: 7%;">Status</th>
           <th style="width: 8%;">Priority</th>
@@ -113,11 +113,11 @@
       new ServerTable({
         tableSelector: "#routers-table",
         apiUrl: "/api/routers",
-        defaultSortCol: "identity_name",
+        defaultSortCol: "customer_name",
         defaultSortDir: "asc",
         headers: [
-          "identity_name", // index 0
-          "customer_name", // index 1
+          "customer_name", // index 0
+          "identity_name", // index 1
           "mgmt_host",     // index 2
           "status",        // index 3
           "priority",      // index 4
@@ -169,8 +169,10 @@
               </button>`;
 
           return `
+            <td>${r.customer_id
+              ? `<a href="/customers/${r.customer_id}" style="text-decoration:none; color:var(--primary); font-weight:600;">${esc(r.customer_name)}</a>`
+              : '—'}</td>
             <td style="font-weight:600; color:var(--primary);">${esc(r.identity_name)}</td>
-            <td>${esc(r.customer_name) || '—'}</td>
             <td style="font-family:ui-monospace, monospace; font-size:0.85rem;">${mgmtText}</td>
             <td>${statusBadge}</td>
             <td>${priorityBadge}</td>
