@@ -9,8 +9,10 @@ can't drift.
 Pipeline per report: regenerate the customer-locked dashboard clone (so
 panels always reflect the current dashboard definitions), render a curated
 set of its panels to PNG via the grafana-image-renderer service, pull
-headline KPI numbers straight from TimescaleDB, and assemble everything
-into a bilingual (English/Indonesian) PDF with fpdf2.
+headline KPI numbers + manual SLA/ticket entries straight from TimescaleDB,
+and assemble everything into a bilingual (English/Indonesian) PDF by
+rendering report_template.html (Lumina Console design tokens) through
+WeasyPrint.
 
 Panel images come from the LOCKED clone (uid customer-<slug>), not the
 master dashboard -- the clone has customer_id baked into every query and
@@ -19,14 +21,14 @@ customer's data into a customer-facing document.
 """
 
 import base64
-import io
 import os
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
+import jinja2
 import psycopg2
 import psycopg2.extras
-from fpdf import FPDF
+from weasyprint import HTML
 
 from dashboard_share import share_dashboard_for_customer, slugify
 
@@ -36,16 +38,45 @@ GRAFANA_ADMIN_PASSWORD = os.environ.get("GRAFANA_ADMIN_PASSWORD", "admin")
 
 WIB = timezone(timedelta(hours=7))  # Asia/Jakarta
 
-# Curated, non-repeated panels only -- the repeat-per-router panels
-# (Config Changes, CPU Cores, etc.) don't render via d-solo, and are
-# NOC-facing anyway. (panel_id, height_px, english_caption, indonesian_caption)
-REPORT_PANELS = [
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMPLATE_NAME = "report_template.html"
+# Full wordmark if the operator has dropped it in (assets/gmedia-logo.png),
+# else the G-mark + an Inter wordmark rendered by the template.
+LOGO_FULL_PATH = os.path.join(_APP_DIR, "assets", "gmedia-logo.png")
+LOGO_MARK_PATH = os.path.join(_APP_DIR, "assets", "g-mark.png")
+
+MONTHS_ID = ["Januari", "Februari", "Maret", "April", "Mei", "Juni",
+             "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
+
+
+def _fmt_pct(v):
+    return f"{float(v):.2f}%" if v is not None else "n/a"
+
+
+def _fmt_hms(seconds):
+    s = int(seconds or 0)
+    return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
+
+
+def _png_uri(png_bytes):
+    return "data:image/png;base64," + base64.b64encode(png_bytes).decode()
+
+# Curated, non-repeated panels. (panel_id, height_px, english_caption,
+# indonesian_caption). The ping graphs (panel 105, repeat-per-router) are
+# rendered separately per router in generate_report -- d-solo renders a
+# repeat panel fine when the variable is passed as &var-router=<id>. The
+# AP list is a native PDF table (collect_ap_rows), not a panel image: a
+# table image cuts off at the render height (~10 rows), and a hotel site
+# can have 300+ APs.
+REPORT_PANELS_HEAD = [
     (10, 500, "Internet Traffic (All Routers Combined)", "Trafik Internet (Gabungan Semua Router)"),
-    (3, 450, "Latency, Jitter & Packet Loss", "Latensi, Jitter & Kehilangan Paket"),
+]
+PING_PANEL_ID = 105
+PING_PANEL_HEIGHT = 450
+REPORT_PANELS_TAIL = [
     (9, 500, "Router Resource Usage (CPU / RAM / Disk)", "Penggunaan Sumber Daya Router (CPU / RAM / Disk)"),
     (6, 500, "Wi-Fi Clients Over Time", "Jumlah Perangkat Wi-Fi dari Waktu ke Waktu"),
     (7, 500, "Wi-Fi Quality Trends (Signal / Satisfaction / Retry)", "Tren Kualitas Wi-Fi (Sinyal / Kepuasan / Pengulangan)"),
-    (8, 600, "Access Point Status", "Status Access Point"),
 ]
 
 
@@ -55,12 +86,12 @@ def get_conn():
     return conn
 
 
-def render_panel(uid, panel_id, days, width=1000, height=500):
+def render_panel(uid, panel_id, from_ms, to_ms, width=1000, height=500, extra=""):
     auth = base64.b64encode(f"admin:{GRAFANA_ADMIN_PASSWORD}".encode()).decode()
     url = (
         f"{GRAFANA_INTERNAL_URL}/render/d-solo/{uid}/r"
         f"?panelId={panel_id}&width={width}&height={height}"
-        f"&from=now-{days}d&to=now&theme=light&tz=Asia%2FJakarta"
+        f"&from={from_ms}&to={to_ms}&theme=light&tz=Asia%2FJakarta{extra}"
     )
     req = urllib.request.Request(url, headers={"Authorization": f"Basic {auth}"})
     # First render after a renderer cold start is slow (headless browser
@@ -69,10 +100,10 @@ def render_panel(uid, panel_id, days, width=1000, height=500):
         return resp.read()
 
 
-def collect_kpis(customer_id, days):
+def collect_kpis(customer_id, start, end):
     """
     Headline numbers for the cover page. Period averages for the path
-    metrics (what was the month actually like), current 15-minute values
+    metrics (what was the period actually like), current 15-minute values
     for the wireless state (what does it look like right now) -- same SQL
     shapes as the dashboard cards, customer-scoped.
     """
@@ -89,10 +120,10 @@ def collect_kpis(customer_id, days):
                round(avg(pm.jitter_ms)::numeric, 1) AS avg_jitter,
                round(avg(pm.packet_loss_pct)::numeric, 2) AS avg_loss
         FROM path_metrics pm JOIN routers r ON r.id = pm.router_id
-        WHERE r.customer_id = %s AND pm.time > now() - make_interval(days => %s)
+        WHERE r.customer_id = %s AND pm.time >= %s AND pm.time < %s
           AND NOT (pm.rtt_avg_ms = 0 AND pm.packet_loss_pct = 100)
         """,
-        (customer_id, days),
+        (customer_id, start, end),
     )
     path = cur.fetchone()
 
@@ -100,10 +131,10 @@ def collect_kpis(customer_id, days):
         """
         SELECT round(avg(100.0 * tx_retries / NULLIF(wifi_tx_attempts, 0))::numeric, 1) AS avg_retry
         FROM client_metrics cm JOIN sites s ON s.id = cm.site_id
-        WHERE s.customer_id = %s AND cm.time > now() - make_interval(days => %s)
+        WHERE s.customer_id = %s AND cm.time >= %s AND cm.time < %s
           AND cm.is_wired = false
         """,
-        (customer_id, days),
+        (customer_id, start, end),
     )
     retry = cur.fetchone()
 
@@ -151,90 +182,266 @@ def collect_kpis(customer_id, days):
     ]
 
 
-def build_pdf(customer_name, days, kpis, panel_sections):
+def collect_ap_rows(customer_id):
     """
-    panel_sections: list of (png_bytes, english_caption, indonesian_caption).
-    Returns the PDF as bytes.
+    Full AP list for the report -- same latest-row-per-AP shape and 15-min
+    freshness window as the 'Access Points Online (now)' KPI, so the table
+    always agrees with the cover-page count. Offline APs sort first so
+    problems land on the first page. Returns (rows, summary_en, summary_id).
     """
-    now_wib = datetime.now(WIB)
-    period_en = f"Last {days} days (to {now_wib.strftime('%d %b %Y')})"
-    period_id = f"{days} hari terakhir (s.d. {now_wib.strftime('%d %b %Y')})"
-
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=15)
-
-    # --- Cover page ---
-    pdf.add_page()
-    pdf.set_font("Helvetica", "B", 22)
-    pdf.ln(20)
-    pdf.cell(0, 10, "Network Quality Report", align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "", 14)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 8, "Laporan Kualitas Jaringan", align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(10)
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(0, 9, customer_name, align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "", 11)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 7, f"{period_en}  |  {period_id}", align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 7, f"Generated / Dibuat: {now_wib.strftime('%d %b %Y %H:%M')} WIB", align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(12)
-
-    # KPI table
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_font("Helvetica", "B", 13)
-    pdf.cell(0, 9, "Summary / Ringkasan", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(2)
-    for en, idn, value in kpis:
-        pdf.set_font("Helvetica", "", 11)
-        pdf.cell(120, 8, en, border="B")
-        pdf.set_font("Helvetica", "B", 11)
-        pdf.cell(0, 8, value, border="B", align="R", new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "I", 8)
-        pdf.set_text_color(120, 120, 120)
-        pdf.cell(0, 4, idn, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_text_color(0, 0, 0)
-        pdf.ln(1)
-
-    # --- Panel pages ---
-    for png, en, idn in panel_sections:
-        pdf.add_page()
-        pdf.set_font("Helvetica", "B", 14)
-        pdf.cell(0, 9, en, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "I", 10)
-        pdf.set_text_color(120, 120, 120)
-        pdf.cell(0, 6, idn, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_text_color(0, 0, 0)
-        pdf.ln(4)
-        pdf.image(io.BytesIO(png), x=10, w=190)
-
-    return bytes(pdf.output())
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT ap_name, CASE WHEN state = 1 THEN 'online' ELSE 'offline' END AS status,
+               num_sta, satisfaction, cpu_pct, model
+        FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name, ai.state, ai.num_sta,
+                     ai.satisfaction, ai.cpu_pct, ai.model
+              FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id
+              WHERE s.customer_id = %s AND ai.time > now() - interval '15 minutes'
+              ORDER BY ai.ap_mac, ai.time DESC) latest
+        ORDER BY (COALESCE(state, 0) = 1), ap_name
+        """,
+        (customer_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    for r in rows:
+        # UniFi reports satisfaction -1 when it has no measurement yet --
+        # that's "unknown", not "bad": render as a dash, never as a warning.
+        if r["satisfaction"] is not None and r["satisfaction"] < 0:
+            r["satisfaction"] = None
+        # Chip color per the design plan: offline -> terracotta; online but
+        # hot CPU or poor satisfaction -> amber; healthy -> blue.
+        if r["status"] == "offline":
+            r["chip"] = "chip-err"
+        elif (r["cpu_pct"] is not None and r["cpu_pct"] >= 70) or \
+             (r["satisfaction"] is not None and r["satisfaction"] < 70):
+            r["chip"] = "chip-warn"
+        else:
+            r["chip"] = "chip-ok"
+    online = sum(1 for r in rows if r["status"] == "online")
+    offline = len(rows) - online
+    summary_en = f"{len(rows)} access points -- {online} online / {offline} offline"
+    summary_id = f"{len(rows)} access point -- {online} aktif / {offline} nonaktif"
+    return rows, summary_en, summary_id
 
 
-def generate_report(customer_id, days=30):
+def collect_sla(customer_id, start, end):
+    """
+    Manual SLA + ticket entries (interim source until the ERP API exists --
+    see ERP_SLA_API.md) for every month overlapping [start, end), plus a
+    period roll-up and a year-to-date roll-up for the report-end year.
+    Returns (sla_months, sla_overall, ytd); sla_months is [] when no data.
+    Totals are node-weighted averages, matching how the manual SLA report
+    presented its Total row.
+    """
+    period_start = start.astimezone(WIB).date().replace(day=1)
+    period_end = end.astimezone(WIB).date()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, month, service_id, service_name, node_count, sla_pct "
+        "FROM customer_sla_services "
+        "WHERE customer_id = %s AND month >= %s AND month < %s "
+        "ORDER BY month, service_id",
+        (customer_id, period_start, period_end),
+    )
+    service_rows = cur.fetchall()
+    cur.execute(
+        "SELECT ticket_no, tanggal, description, action, mttr_seconds, status "
+        "FROM customer_tickets "
+        "WHERE customer_id = %s AND tanggal >= %s AND tanggal < %s "
+        "ORDER BY tanggal, ticket_no",
+        (customer_id, period_start, period_end),
+    )
+    ticket_rows = cur.fetchall()
+
+    year = end.astimezone(WIB).year
+    cur.execute(
+        "SELECT COALESCE(sum(sla_pct * node_count) / NULLIF(sum(node_count), 0), NULL) AS sla "
+        "FROM customer_sla_services "
+        "WHERE customer_id = %s AND month >= %s AND month < %s",
+        (customer_id, f"{year}-01-01", f"{year + 1}-01-01"),
+    )
+    ytd_sla = cur.fetchone()["sla"]
+    cur.execute(
+        "SELECT count(*) AS n, COALESCE(sum(mttr_seconds), 0) AS dur "
+        "FROM customer_tickets "
+        "WHERE customer_id = %s AND tanggal >= %s AND tanggal < %s",
+        (customer_id, f"{year}-01-01", f"{year + 1}-01-01"),
+    )
+    ytd_tickets = cur.fetchone()
+    conn.close()
+
+    sla_months = []
+    for row in service_rows:
+        m = row["month"]
+        if not sla_months or sla_months[-1]["month"] != m:
+            sla_months.append({
+                "month": m,
+                "label": f"{MONTHS_ID[m.month - 1]} {m.year}",
+                "services": [], "tickets": [],
+            })
+        row["sla_fmt"] = _fmt_pct(row["sla_pct"])
+        sla_months[-1]["services"].append(row)
+    for block in sla_months:
+        svcs = block["services"]
+        total_nodes = sum(s["node_count"] for s in svcs)
+        weighted = sum(float(s["sla_pct"]) * s["node_count"] for s in svcs)
+        block["total_nodes"] = total_nodes
+        block["total_sla"] = _fmt_pct(weighted / total_nodes if total_nodes else None)
+        for t in ticket_rows:
+            if t["tanggal"].replace(day=1) == block["month"]:
+                t["tanggal_fmt"] = t["tanggal"].strftime("%d %b %Y")
+                t["mttr_fmt"] = _fmt_hms(t["mttr_seconds"]) if t["mttr_seconds"] is not None else "–"
+                block["tickets"].append(t)
+
+    if not sla_months:
+        return [], None, None
+
+    all_nodes = sum(b["total_nodes"] for b in sla_months)
+    all_weighted = sum(
+        float(s["sla_pct"]) * s["node_count"] for b in sla_months for s in b["services"]
+    )
+    overall_sla = all_weighted / all_nodes if all_nodes else None
+    sla_overall = {
+        "sla": _fmt_pct(overall_sla),
+        "downtime": _fmt_pct(100 - overall_sla if overall_sla is not None else None),
+        "tickets": len(ticket_rows),
+        "duration": _fmt_hms(sum(t["mttr_seconds"] or 0 for t in ticket_rows)),
+    }
+    ytd = {
+        "year": year,
+        "sla": _fmt_pct(ytd_sla),
+        "downtime": _fmt_pct(100 - float(ytd_sla) if ytd_sla is not None else None),
+        "tickets": ytd_tickets["n"],
+        "duration": _fmt_hms(ytd_tickets["dur"]),
+    }
+    return sla_months, sla_overall, ytd
+
+
+def build_pdf(context):
+    """Render report_template.html with the assembled context and print it
+    to PDF via WeasyPrint. base_url makes relative asset paths resolve."""
+    env = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(_APP_DIR),
+        autoescape=True,
+    )
+    html = env.get_template(TEMPLATE_NAME).render(**context)
+    return HTML(string=html, base_url=_APP_DIR).write_pdf()
+
+
+def generate_report(customer_id, days=30, start=None, end=None):
     """
     End-to-end: returns (customer_name, pdf_bytes). Raises on any failure --
     caller decides how to surface it (HTTP error vs. reporter log line).
+
+    Period is either the trailing `days` window (default, what the monthly
+    reporter uses) or an explicit [start, end) pair of tz-aware datetimes
+    (the customer-detail date picker); explicit dates win.
     """
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT name FROM customers WHERE id = %s", (customer_id,))
     row = cur.fetchone()
-    conn.close()
     if row is None:
+        conn.close()
         raise ValueError(f"no customer with id {customer_id}")
     customer_name = row["name"]
+
+    if start is not None and end is not None:
+        # End is exclusive; the label shows the last included day.
+        last_day = (end - timedelta(seconds=1)).astimezone(WIB)
+        period_en = f"{start.astimezone(WIB).strftime('%d %b %Y')} - {last_day.strftime('%d %b %Y')} (WIB)"
+        period_id = period_en
+    else:
+        end = datetime.now(WIB)
+        start = end - timedelta(days=days)
+        period_en = f"Last {days} days (to {end.strftime('%d %b %Y')})"
+        period_id = f"{days} hari terakhir (s.d. {end.strftime('%d %b %Y')})"
+    from_ms = int(start.timestamp() * 1000)
+    to_ms = int(end.timestamp() * 1000)
+
+    # Routers that actually have path data in the period -- each gets its
+    # own latency/jitter/loss graph page (panel 105 is repeat-per-router;
+    # d-solo renders it fine with the variable passed explicitly).
+    cur.execute(
+        """
+        SELECT r.id, r.identity_name FROM routers r
+        WHERE r.customer_id = %s
+          AND EXISTS (SELECT 1 FROM path_metrics pm
+                      WHERE pm.router_id = r.id AND pm.time >= %s AND pm.time < %s)
+        ORDER BY r.identity_name
+        """,
+        (customer_id, start, end),
+    )
+    ping_routers = cur.fetchall()
+    conn.close()
 
     # Regenerate the locked clone so the report reflects the latest panel
     # definitions (idempotent -- same uid, overwrite=True).
     share_dashboard_for_customer(customer_id, customer_name)
     uid = f"customer-{slugify(customer_name)}"
 
-    sections = []
-    for panel_id, height, en, idn in REPORT_PANELS:
-        png = render_panel(uid, panel_id, days, width=1000, height=height)
-        sections.append((png, en, idn))
+    # Panels render at 1400px wide (~200 DPI on an A4 content box).
+    def section(png, en, idn):
+        return {"png_uri": _png_uri(png), "title_en": en, "title_id": idn}
 
-    kpis = collect_kpis(customer_id, days)
-    return customer_name, build_pdf(customer_name, days, kpis, sections)
+    sections = []
+    for panel_id, height, en, idn in REPORT_PANELS_HEAD:
+        png = render_panel(uid, panel_id, from_ms, to_ms, width=1400, height=int(height * 1.4))
+        sections.append(section(png, en, idn))
+    for r in ping_routers:
+        png = render_panel(uid, PING_PANEL_ID, from_ms, to_ms, width=1400,
+                           height=int(PING_PANEL_HEIGHT * 1.4), extra=f"&var-router={r['id']}")
+        sections.append(section(
+            png,
+            f"Path Latency, Jitter & Packet Loss — {r['identity_name']}",
+            f"Latensi, Jitter & Kehilangan Paket — {r['identity_name']}",
+        ))
+    for panel_id, height, en, idn in REPORT_PANELS_TAIL:
+        png = render_panel(uid, panel_id, from_ms, to_ms, width=1400, height=int(height * 1.4))
+        sections.append(section(png, en, idn))
+
+    kpis = collect_kpis(customer_id, start, end)
+    ap_rows, ap_summary_en, ap_summary_id = collect_ap_rows(customer_id)
+    sla_months, sla_overall, ytd = collect_sla(customer_id, start, end)
+
+    hero_kpis = []
+    if sla_overall:
+        hero_kpis.append({"value": sla_overall["sla"], "label": "SLA Achievement"})
+        hero_kpis.append({"value": sla_overall["tickets"], "label": "Tickets This Period"})
+    aps_online = next((v for en2, _, v in kpis if en2.startswith("Access Points Online")), None)
+    if aps_online and aps_online != "0 / 0":
+        hero_kpis.append({"value": aps_online, "label": "Access Points Online"})
+    if not sla_overall:
+        hero_kpis.append({"value": next((v for en2, _, v in kpis if en2 == "Average Latency"), "n/a"),
+                          "label": "Average Latency"})
+        hero_kpis.append({"value": next((v for en2, _, v in kpis if en2 == "Average Packet Loss"), "n/a"),
+                          "label": "Average Packet Loss"})
+
+    logo_full = os.path.exists(LOGO_FULL_PATH)
+    with open(LOGO_FULL_PATH if logo_full else LOGO_MARK_PATH, "rb") as f:
+        logo_uri = "data:image/png;base64," + base64.b64encode(f.read()).decode()
+
+    footer_left = f"{customer_name} · {period_en} · Generated automatically — GMedia NOC"
+    context = {
+        "customer_name": customer_name,
+        "period_en": period_en,
+        "period_id": period_id,
+        "generated_at": datetime.now(WIB).strftime("%d %b %Y %H:%M"),
+        "footer_left": footer_left.replace("\\", "").replace('"', "'"),
+        "logo_uri": logo_uri,
+        "logo_full": logo_full,
+        "hero_kpis": hero_kpis,
+        "kpis": kpis,
+        "sla_months": sla_months,
+        "sla_overall": sla_overall,
+        "ytd": ytd,
+        "panel_sections": sections,
+        "ap_rows": ap_rows,
+        "ap_summary_en": ap_summary_en,
+        "ap_summary_id": ap_summary_id,
+    }
+    return customer_name, build_pdf(context)

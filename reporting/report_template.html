@@ -1,0 +1,227 @@
+<!doctype html>
+{#
+  Monthly Report template (SLA + QoE merged), rendered to PDF by WeasyPrint.
+  Design: Lumina Console tokens (admin-ui/DESIGN.md) per the approved
+  Claude-Design prototype "Monthly Report Prototype - ARKON".
+  Context is assembled by report_lib.generate_report.
+#}
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page {
+    size: A4 portrait;
+    margin: 18mm 16mm 22mm 16mm;
+    @bottom-left {
+      content: "{{ footer_left }}";
+      font-family: Inter, sans-serif; font-size: 8pt; color: #737782;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: Inter, sans-serif; font-size: 8pt; color: #737782;
+    }
+  }
+  body { font-family: Inter, sans-serif; color: #131c28; font-size: 10pt; margin: 0; }
+  h1, h2, h3 { margin: 0; }
+  .page { page-break-before: always; }
+  .section-title {
+    font-size: 15pt; font-weight: 600; letter-spacing: -0.01em;
+    border-bottom: 2pt solid #1e4b8f; padding-bottom: 4pt; margin-bottom: 4pt;
+  }
+  .section-sub { font-size: 8.5pt; color: #737782; font-style: italic; margin: 0 0 10pt; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 4pt 7pt; font-size: 8.5pt; }
+  thead th {
+    background: #e0e9fa; color: #131c28; font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase; font-size: 7.5pt;
+    border-bottom: 1pt solid #c3c6d2;
+  }
+  tbody td { border-bottom: 0.5pt solid #dae3f4; color: #434751; }
+  tbody tr:nth-child(even) td { background: #f8f9ff; }
+  tr.total-row td { font-weight: 700; color: #131c28; border-top: 1pt solid #c3c6d2; }
+  .mono { font-family: monospace; font-size: 8.5pt; }
+  .chip {
+    display: inline-block; padding: 1pt 6pt; border-radius: 3pt;
+    font-size: 7.5pt; font-weight: 700; letter-spacing: 0.03em;
+  }
+  .chip-ok   { background: #dae3f4; color: #00639b; }
+  .chip-warn { background: #ffe8c7; color: #8a5a06; }
+  .chip-err  { background: #ffdad6; color: #93000a; }
+  .kpi-grid { display: flex; flex-wrap: wrap; gap: 8pt; }
+  .kpi {
+    background: #ffffff; border: 1pt solid #dae3f4; border-radius: 6pt;
+    padding: 9pt 11pt; flex: 1; min-width: 100pt; page-break-inside: avoid;
+  }
+  .kpi .val { font-size: 15pt; font-weight: 700; color: #1e4b8f; line-height: 1.1; }
+  .kpi .lbl { font-size: 7.5pt; color: #737782; margin-top: 3pt; }
+  .kpi .lbl-id { font-size: 7pt; color: #a3a7b2; }
+  .strip-label {
+    font-size: 8.5pt; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.05em; color: #737782; margin: 14pt 0 6pt;
+  }
+  .panel-img { width: 100%; border: 1pt solid #dae3f4; border-radius: 6pt; }
+  .card {
+    background: #ffffff; border: 1pt solid #dae3f4; border-radius: 6pt;
+    padding: 11pt 13pt; page-break-inside: avoid;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<div style="height: 245mm; position: relative;">
+  <div style="padding-top: 4mm;">
+    {% if logo_full %}
+      <img src="{{ logo_uri }}" style="height: 13mm;" alt="GMedia">
+    {% else %}
+      <div style="display: flex; align-items: center; gap: 3mm;">
+        <img src="{{ logo_uri }}" style="height: 12mm;" alt="G">
+        <span style="font-size: 20pt; font-weight: 700; letter-spacing: 0.04em; color: #1e4b8f;">GMEDIA</span>
+      </div>
+    {% endif %}
+  </div>
+
+  <div style="position: absolute; top: 88mm; left: 0; right: 0;">
+    <p style="font-size: 10pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #00639b; margin: 0 0 7pt;">
+      Monthly Network Performance Report</p>
+    <h1 style="font-size: 26pt; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin: 0 0 5pt;">{{ customer_name }}</h1>
+    <p style="font-size: 13pt; color: #434751; margin: 0 0 18pt;">Reporting Period: {{ period_en }}</p>
+    <div class="kpi-grid">
+      {% for k in hero_kpis %}
+      <div class="kpi"><div class="val">{{ k.value }}</div><div class="lbl">{{ k.label }}</div></div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div style="position: absolute; bottom: 0; right: 0; text-align: right;">
+    <p style="font-size: 9.5pt; font-weight: 700; color: #1e4b8f; margin: 0;">PT Media Sarana Data (GMEDIA)</p>
+    <p style="font-size: 8.5pt; color: #434751; margin: 2pt 0 0; line-height: 1.5;">
+      Jl. Siliwangi No. 32G, Nogotirto, Gamping, Sleman,<br>
+      Daerah Istimewa Yogyakarta &middot; Kode Pos 55592 &middot; Telp: (0274) 380 345</p>
+    <p style="font-size: 8pt; color: #737782; margin: 6pt 0 0;">Generated / Dibuat: {{ generated_at }} WIB</p>
+  </div>
+</div>
+
+<!-- ============ EXECUTIVE SUMMARY ============ -->
+<div class="page">
+  <h2 class="section-title">Executive Summary</h2>
+  <p class="section-sub">Ringkasan Eksekutif &mdash; {{ period_en }}</p>
+
+  {% if sla_months %}
+  <p class="strip-label">Service Level</p>
+  <div class="kpi-grid">
+    <div class="kpi"><div class="val">{{ sla_overall.sla }}</div><div class="lbl">SLA / Uptime</div></div>
+    <div class="kpi"><div class="val">{{ sla_overall.downtime }}</div><div class="lbl">Downtime</div></div>
+    <div class="kpi"><div class="val">{{ sla_overall.tickets }}</div><div class="lbl">Tickets This Period</div></div>
+    <div class="kpi"><div class="val">{{ sla_overall.duration }}</div><div class="lbl">Total Ticket Duration</div></div>
+  </div>
+  {% endif %}
+
+  <p class="strip-label">Network Quality</p>
+  <div class="kpi-grid" style="flex-wrap: wrap;">
+    {% for en, idn, value in kpis %}
+    <div class="kpi" style="flex: 0 0 22%;">
+      <div class="val">{{ value }}</div>
+      <div class="lbl">{{ en }}<br><span class="lbl-id">{{ idn }}</span></div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- ============ SLA / AVAILABILITY / TICKETS ============ -->
+{% if sla_months %}
+<div class="page">
+  <h2 class="section-title">SLA &amp; Service Availability</h2>
+  <p class="section-sub">SLA &amp; Ketersediaan Layanan</p>
+
+  {% for m in sla_months %}
+  <p class="strip-label">Summary Report &mdash; {{ m.label }}</p>
+  <table style="margin-bottom: 10pt;">
+    <thead><tr><th style="width:8%;">No</th><th>Service</th><th style="width:14%;">Total Node</th><th style="width:16%;">SLA Service</th></tr></thead>
+    <tbody>
+      {% for s in m.services %}
+      <tr><td>{{ loop.index }}</td><td>{{ s.service_name }}</td><td>{{ s.node_count }}</td><td>{{ s.sla_fmt }}</td></tr>
+      {% endfor %}
+      <tr class="total-row"><td colspan="2">Total</td><td>{{ m.total_nodes }}</td><td>{{ m.total_sla }}</td></tr>
+    </tbody>
+  </table>
+
+  <p class="strip-label">Detailed Service Availability &mdash; {{ m.label }}</p>
+  <table style="margin-bottom: 10pt;">
+    <thead><tr><th style="width:8%;">No</th><th>Service ID</th><th style="width:14%;">Node</th><th style="width:16%;">Availability</th></tr></thead>
+    <tbody>
+      {% for s in m.services %}
+      <tr><td>{{ loop.index }}</td><td class="mono">{{ s.service_id }}</td><td>{{ s.node_count }}</td><td>{{ s.sla_fmt }}</td></tr>
+      {% endfor %}
+      <tr class="total-row"><td colspan="2">Total</td><td>{{ m.total_nodes }}</td><td>{{ m.total_sla }}</td></tr>
+    </tbody>
+  </table>
+
+  <p class="strip-label">Ticket Report &mdash; {{ m.label }}</p>
+  <table style="margin-bottom: 14pt;">
+    <thead><tr><th>Ticket</th><th style="width:13%;">Tanggal</th><th>Description</th><th>Action</th><th style="width:11%;">MTTR</th><th style="width:10%;">Status</th></tr></thead>
+    <tbody>
+      {% for t in m.tickets %}
+      <tr>
+        <td class="mono">{{ t.ticket_no }}</td><td>{{ t.tanggal_fmt }}</td>
+        <td>{{ t.description or "–" }}</td><td>{{ t.action or "–" }}</td>
+        <td>{{ t.mttr_fmt }}</td>
+        <td><span class="chip {{ 'chip-err' if t.status == 'open' else 'chip-ok' }}">{{ t.status }}</span></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" style="text-align:center; color:#737782; padding: 12pt;">No tickets recorded this period / Tidak ada gangguan tercatat</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endfor %}
+
+  <div class="card">
+    <p class="strip-label" style="margin-top: 0;">SLA {{ ytd.year }} Year-to-Date</p>
+    <div>
+      <div style="display:inline-block; margin-right: 22pt;"><span style="font-size:13pt; font-weight:700; color:#1e4b8f;">{{ ytd.sla }}</span><br><span style="font-size:7.5pt; color:#737782;">SLA / Online</span></div>
+      <div style="display:inline-block; margin-right: 22pt;"><span style="font-size:13pt; font-weight:700; color:#1e4b8f;">{{ ytd.downtime }}</span><br><span style="font-size:7.5pt; color:#737782;">Downtime</span></div>
+      <div style="display:inline-block; margin-right: 22pt;"><span style="font-size:13pt; font-weight:700; color:#1e4b8f;">{{ ytd.tickets }}</span><br><span style="font-size:7.5pt; color:#737782;">Number of Tickets</span></div>
+      <div style="display:inline-block;"><span style="font-size:13pt; font-weight:700; color:#1e4b8f;">{{ ytd.duration }}</span><br><span style="font-size:7.5pt; color:#737782;">Ticket Duration</span></div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- ============ PANEL PAGES ============ -->
+{% for s in panel_sections %}
+<div class="page">
+  <h2 class="section-title">{{ s.title_en }}</h2>
+  <p class="section-sub">{{ s.title_id }}</p>
+  <img class="panel-img" src="{{ s.png_uri }}">
+</div>
+{% endfor %}
+
+<!-- ============ AP STATUS ============ -->
+<div class="page">
+  <h2 class="section-title">Access Point Status</h2>
+  <p class="section-sub">Status Access Point &mdash; {{ ap_summary_en }} / {{ ap_summary_id }}</p>
+  {% if ap_rows %}
+  <table>
+    <thead>
+      <tr><th style="width:34%;">AP</th><th style="width:12%;">Status</th><th style="width:9%;">Clients</th><th style="width:13%;">Satisfaction</th><th style="width:9%;">CPU %</th><th>Model</th></tr>
+    </thead>
+    <tbody>
+      {% for r in ap_rows %}
+      <tr>
+        <td>{{ r.ap_name or "–" }}</td>
+        <td><span class="chip {{ r.chip }}">{{ r.status }}</span></td>
+        <td>{{ r.num_sta if r.num_sta is not none else "–" }}</td>
+        <td>{{ (r.satisfaction ~ "%") if r.satisfaction is not none else "–" }}</td>
+        <td>{{ r.cpu_pct if r.cpu_pct is not none else "–" }}</td>
+        <td>{{ r.model or "–" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p style="color:#737782;">No access point data in the last 15 minutes. / Tidak ada data access point dalam 15 menit terakhir.</p>
+  {% endif %}
+</div>
+
+</body>
+</html>
