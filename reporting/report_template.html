@@ -14,14 +14,14 @@
     margin: 18mm 16mm 22mm 16mm;
     @bottom-left {
       content: "{{ footer_left }}";
-      font-family: Inter, sans-serif; font-size: 8pt; color: #737782;
+      font-family: Montserrat, sans-serif; font-size: 8pt; color: #737782;
     }
     @bottom-right {
       content: "Page " counter(page) " of " counter(pages);
-      font-family: Inter, sans-serif; font-size: 8pt; color: #737782;
+      font-family: Montserrat, sans-serif; font-size: 8pt; color: #737782;
     }
   }
-  body { font-family: Inter, sans-serif; color: #131c28; font-size: 10pt; margin: 0; }
+  body { font-family: Montserrat, sans-serif; color: #131c28; font-size: 10pt; margin: 0; }
   h1, h2, h3 { margin: 0; }
   .page { page-break-before: always; }
   .section-title {
@@ -55,6 +55,8 @@
   .kpi .val { font-size: 15pt; font-weight: 700; color: #1e4b8f; line-height: 1.1; }
   .kpi .lbl { font-size: 7.5pt; color: #737782; margin-top: 3pt; }
   .kpi .lbl-id { font-size: 7pt; color: #a3a7b2; }
+  /* Montserrat has no U+2011, so "Wi-Fi" would break after the hyphen. */
+  .nw { white-space: nowrap; }
   .strip-label {
     font-size: 8.5pt; font-weight: 700; text-transform: uppercase;
     letter-spacing: 0.05em; color: #737782; margin: 14pt 0 6pt;
@@ -122,7 +124,7 @@
     {% for en, idn, value in kpis %}
     <div class="kpi" style="flex: 0 0 22%;">
       <div class="val">{{ value }}</div>
-      <div class="lbl">{{ en }}<br><span class="lbl-id">{{ idn }}</span></div>
+      <div class="lbl">{{ en|replace('Wi-Fi', '<span class="nw">Wi-Fi</span>'|safe) }}<br><span class="lbl-id">{{ idn|replace('Wi-Fi', '<span class="nw">Wi-Fi</span>'|safe) }}</span></div>
     </div>
     {% endfor %}
   </div>

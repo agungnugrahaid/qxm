@@ -41,7 +41,7 @@ WIB = timezone(timedelta(hours=7))  # Asia/Jakarta
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_NAME = "report_template.html"
 # Full wordmark if the operator has dropped it in (assets/gmedia-logo.png),
-# else the G-mark + an Inter wordmark rendered by the template.
+# else the G-mark + a text wordmark rendered by the template.
 LOGO_FULL_PATH = os.path.join(_APP_DIR, "assets", "gmedia-logo.png")
 LOGO_MARK_PATH = os.path.join(_APP_DIR, "assets", "g-mark.png")
 
