@@ -447,7 +447,16 @@ def deploy_and_record(router):
             detail += " -- " + " | ".join(f"WARNING: {w}" for w in warnings)
         result = {"identity_name": renamed_to or router["identity_name"], "ok": True, "detail": detail}
     except Exception as e:
-        result = {"identity_name": router["identity_name"], "ok": False, "detail": str(e)}
+        detail = str(e)
+        if "not allowed by device-mode" in detail:
+            detail += (
+                " -- RouterOS 7.17+ device-mode lock: run"
+                " /system/device-mode/update scheduler=yes fetch=yes"
+                " on the router, then short-press its reset/mode button or"
+                " power-cycle it within 5 minutes (soft reboot doesn't count),"
+                " and deploy again. See routeros/README.md."
+            )
+        result = {"identity_name": router["identity_name"], "ok": False, "detail": detail}
 
     cur.execute(
         "UPDATE routers SET last_deploy_status = %s, last_deploy_at = %s, last_deploy_detail = %s WHERE id = %s",

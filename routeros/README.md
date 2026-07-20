@@ -28,6 +28,29 @@ The v6 variant gets its ping data from **`/tool flood-ping`'s `do={}` block** in
 - **Same scheduler-only quirk as v7's `as-value`**: real values only when the script is fired by `/system scheduler`; a manual/API-triggered run silently captures nothing and reports 100% loss until the next scheduled cycle. Don't debug "broken ping" from a manual run on either branch.
 - **v6 jitter is a min/max spread, not true jitter** — flood-ping doesn't expose per-packet RTTs, so `jitter_ms` there is (max − min) over a 10-packet burst rather than v7's mean consecutive-sample difference. Fine for trending; don't compare absolute jitter figures across v6/v7 routers.
 
+## New routers: "not allowed by device-mode" (RouterOS 7.17+)
+
+Devices shipped or netinstalled with RouterOS 7.17+ enforce device-mode feature
+locks; home-class CPE (hAP etc.) arrive with the `scheduler` and `fetch`
+features disabled — and this stack needs both (schedulers trigger the scripts;
+the scripts use `/tool fetch` to POST metrics and SFTP-upload config
+snapshots). Symptom: `/system scheduler add ...` (or a deploy from admin-ui)
+fails with `failure: not allowed by device-mode`.
+
+Check what's locked with `/system/device-mode/print`, then unlock just what we
+need:
+
+```
+/system/device-mode/update scheduler=yes fetch=yes
+```
+
+RouterOS replies asking for **physical confirmation within 5 minutes**:
+short-press the reset/mode button once, or cut power (unplug/replug). A soft
+`/system reboot` does NOT count, and there is deliberately no remote bypass —
+so for an already-installed CPE this means coordinating with someone on site.
+If the 5-minute window lapses, just run the update command again. After the
+router comes back up, re-run whatever failed.
+
 ## Test on one router first
 
 RouterOS scripting syntax for ping statistics (`as-value`, time-value arithmetic) has been finicky across versions in the past. Before rolling this to more than one pilot CPE:

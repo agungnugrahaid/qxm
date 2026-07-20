@@ -87,16 +87,25 @@
       </button>
     </div>
     <pre id="commands-src" tabindex="0" class="diff"
-      style="white-space: pre-wrap; font-family:ui-monospace, monospace; font-size:0.75rem; background-color: var(--inverse-surface); color: var(--inverse-on-surface); padding: 1rem; border-radius: 4px; max-height: 450px; overflow: auto; outline:none;"># 1. Create the system scheduler triggers (metrics every 5m, firmware daily)
+      style="white-space: pre-wrap; font-family:ui-monospace, monospace; font-size:0.75rem; background-color: var(--inverse-surface); color: var(--inverse-on-surface); padding: 1rem; border-radius: 4px; max-height: 450px; overflow: auto; outline:none;"># 0. NEW ROUTERS (RouterOS 7.17+): if a command below fails with
+#    "not allowed by device-mode", unlock the two features we need first:
+#        /system/device-mode/update scheduler=yes fetch=yes
+#    RouterOS then asks for physical confirmation within 5 minutes:
+#    SHORT-press the reset/mode button once, or unplug and replug power.
+#    A soft "/system reboot" does NOT count. Then re-run the commands.
+
+# 1. Create the system scheduler triggers (metrics every 5m, firmware daily)
 /system scheduler add name=qoe-push-metrics interval=5m on-event=qoe-push-metrics
 /system scheduler add name=qoe-push-firmware interval=1d on-event=qoe-push-firmware
 
 # 2. Configure remote syslog forwarding to Loki
-/system logging action add name=qoe-remote target=remote remote={{ syslog_ip }} remote-port={{ syslog_port }}
-/system logging add action=qoe-remote topics=info
-/system logging add action=qoe-remote topics=warning
-/system logging add action=qoe-remote topics=error
-/system logging add action=qoe-remote topics=critical</pre>
+# (action name must be alphanumeric-only on newer RouterOS; "remoteloki"
+#  matches what API deploys create, so a later API deploy updates it in place)
+/system logging action add name=remoteloki target=remote remote={{ syslog_ip }} remote-port={{ syslog_port }}
+/system logging add action=remoteloki topics=info
+/system logging add action=remoteloki topics=warning
+/system logging add action=remoteloki topics=error
+/system logging add action=remoteloki topics=critical</pre>
   </div>
 </div>
 

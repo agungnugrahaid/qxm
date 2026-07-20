@@ -12,18 +12,23 @@ Adds two containers to the same stack — Loki (log storage) and Promtail (log s
 
 Add this to the same RouterOS setup you're already doing for the metrics push (or as its own scheduler-free, one-time config — logging doesn't need scheduling, it streams continuously once configured):
 
-```
-/system logging action add name=remote-loki target=remote remote=<your-server-ip> remote-port=1514 syslog-facility=local0
+The action name must be alphanumeric-only (newer RouterOS rejects hyphens), and it must be one rule per topic — RouterOS ANDs a comma-separated topics list within a single rule (a `topics=info,warning,...` rule silently never fires):
 
-/system logging add topics=info,warning,error,critical action=remote-loki
+```
+/system logging action add name=remoteloki target=remote remote=<your-server-ip> remote-port=1514 syslog-facility=local0
+
+/system logging add topics=info action=remoteloki
+/system logging add topics=warning action=remoteloki
+/system logging add topics=error action=remoteloki
+/system logging add topics=critical action=remoteloki
 ```
 
 If that turns out to be noisy, narrow it to the topics you actually care about instead of everything:
 
 ```
-/system logging add topics=wireless action=remote-loki
-/system logging add topics=ppp action=remote-loki
-/system logging add topics=firewall action=remote-loki
+/system logging add topics=wireless action=remoteloki
+/system logging add topics=ppp action=remoteloki
+/system logging add topics=firewall action=remoteloki
 ```
 
 ## 2. Bring the new services up
