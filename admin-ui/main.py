@@ -71,6 +71,9 @@ RADIUS_CONFIG = {
     "secret1": os.environ.get("RADIUS_SERVER_1_SECRET", "changeme"),
     "secret2": os.environ.get("RADIUS_SERVER_2_SECRET", "changeme"),
 }
+# Pre-filled into the Add Router form (not Edit) as the fleet-standard API login.
+ROUTER_API_DEFAULT_USER = os.environ.get("ROUTER_API_DEFAULT_USER", "")
+ROUTER_API_DEFAULT_PASSWORD = os.environ.get("ROUTER_API_DEFAULT_PASSWORD", "")
 # Same CIDR set as SFTP's own allowlist -- see
 # routeros/qoe-baseline-hardening-v7.rsc's header comment for why this is
 # reused as the router-side management-access allowlist too, rather than
@@ -312,6 +315,8 @@ def new_router_form(request: Request, redirect_to: str = "/"):
     return templates.TemplateResponse(
         "router_form.html",
         {"request": request, "router": None, "customers": customers,
+         "default_admin_user": ROUTER_API_DEFAULT_USER,
+         "default_admin_password": ROUTER_API_DEFAULT_PASSWORD,
          "redirect_to": _safe_next(redirect_to)}
     )
 

@@ -70,6 +70,9 @@ services:
       SFTP_ALLOWED_CIDRS: ${SFTP_ALLOWED_CIDRS:-}
       RADIUS_SERVER_1_SECRET: ${RADIUS_SERVER_1_SECRET:-changeme}
       RADIUS_SERVER_2_SECRET: ${RADIUS_SERVER_2_SECRET:-changeme}
+      # Fleet-standard RouterOS API login, pre-filled in the Add Router form.
+      ROUTER_API_DEFAULT_USER: ${ROUTER_API_DEFAULT_USER:-}
+      ROUTER_API_DEFAULT_PASSWORD: ${ROUTER_API_DEFAULT_PASSWORD:-}
       # App-level login. Empty password = logins refused (fail closed).
       ADMIN_UI_USER: ${ADMIN_UI_USER:-admin}
       ADMIN_UI_PASSWORD: ${ADMIN_UI_PASSWORD:-}

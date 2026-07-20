@@ -34,12 +34,12 @@
 
         <div class="field">
           <label>Admin username (optional)</label>
-          <input name="admin_user" value="{{ router.admin_user if router and router.admin_user else '' }}" placeholder="e.g. admin">
+          <input name="admin_user" value="{{ router.admin_user if router and router.admin_user else (default_admin_user or '') }}" placeholder="e.g. admin">
         </div>
 
         <div class="field">
           <label>Admin password (optional)</label>
-          <input name="admin_password" type="password" value="{{ router.admin_password if router and router.admin_password else '' }}" placeholder="e.g. password123">
+          <input name="admin_password" type="password" value="{{ router.admin_password if router and router.admin_password else (default_admin_password or '') }}" placeholder="e.g. password123">
         </div>
 
         <div class="field">
