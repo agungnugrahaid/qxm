@@ -1,0 +1,90 @@
+{
+  "uid": "flow-overview",
+  "title": "Traffic Flow — Content & Users",
+  "tags": ["flow"],
+  "timezone": "Asia/Jakarta",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "customer_id",
+        "label": "Customer",
+        "type": "query",
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" },
+        "query": "SELECT toString(customer_id) AS __value, customer_name AS __text FROM flow.exporter_map ORDER BY customer_name",
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Top Content Providers (by network)",
+      "type": "table",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Bytes" }, "properties": [ { "id": "unit", "value": "bytes" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" },
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH ext AS (SELECT if(dp, src_addr, dst_addr) AS ext_ip, sum(bytes) AS b FROM (SELECT bytes, src_addr, dst_addr, (isIPAddressInRange(src_addr,'10.0.0.0/8') OR isIPAddressInRange(src_addr,'172.16.0.0/12') OR isIPAddressInRange(src_addr,'192.168.0.0/16') OR isIPAddressInRange(src_addr,'100.64.0.0/10')) AS sp, (isIPAddressInRange(dst_addr,'10.0.0.0/8') OR isIPAddressInRange(dst_addr,'172.16.0.0/12') OR isIPAddressInRange(dst_addr,'192.168.0.0/16') OR isIPAddressInRange(dst_addr,'100.64.0.0/10')) AS dp FROM flow.flows_raw WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map WHERE customer_id = $customer_id) AND $__timeFilter(ts)) WHERE sp != dp GROUP BY ext_ip) SELECT concat(dictGetString('flow.asn_dict','org', toUInt8(0), toUInt32(toIPv4OrDefault(ext_ip))), ' (AS', toString(dictGetUInt32('flow.asn_dict','asn', toUInt8(0), toUInt32(toIPv4OrDefault(ext_ip)))), ' ', dictGetString('flow.asn_dict','country', toUInt8(0), toUInt32(toIPv4OrDefault(ext_ip))), ')') AS Provider, sum(b) AS Bytes FROM ext GROUP BY Provider ORDER BY Bytes DESC LIMIT 15"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Top Internal Users",
+      "type": "table",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Bytes" }, "properties": [ { "id": "unit", "value": "bytes" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" },
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT if(dp, dst_addr, src_addr) AS `Internal IP`, sum(bytes) AS Bytes FROM (SELECT bytes, src_addr, dst_addr, (isIPAddressInRange(dst_addr,'10.0.0.0/8') OR isIPAddressInRange(dst_addr,'172.16.0.0/12') OR isIPAddressInRange(dst_addr,'192.168.0.0/16') OR isIPAddressInRange(dst_addr,'100.64.0.0/10')) AS dp, (isIPAddressInRange(src_addr,'10.0.0.0/8') OR isIPAddressInRange(src_addr,'172.16.0.0/12') OR isIPAddressInRange(src_addr,'192.168.0.0/16') OR isIPAddressInRange(src_addr,'100.64.0.0/10')) AS sp FROM flow.flows_raw WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map WHERE customer_id = $customer_id) AND $__timeFilter(ts)) WHERE sp != dp GROUP BY `Internal IP` ORDER BY Bytes DESC LIMIT 15"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Traffic over time (bytes per interval — Download / Upload)",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 10 },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 1 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" },
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT $__timeInterval(ts) AS time, sum(multiIf(dp, bytes, 0)) AS \"Download\", sum(multiIf(sp, bytes, 0)) AS \"Upload\" FROM (SELECT ts, bytes, (isIPAddressInRange(dst_addr,'10.0.0.0/8') OR isIPAddressInRange(dst_addr,'172.16.0.0/12') OR isIPAddressInRange(dst_addr,'192.168.0.0/16') OR isIPAddressInRange(dst_addr,'100.64.0.0/10')) AS dp, (isIPAddressInRange(src_addr,'10.0.0.0/8') OR isIPAddressInRange(src_addr,'172.16.0.0/12') OR isIPAddressInRange(src_addr,'192.168.0.0/16') OR isIPAddressInRange(src_addr,'100.64.0.0/10')) AS sp FROM flow.flows_raw WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map WHERE customer_id = $customer_id) AND $__timeFilter(ts)) WHERE sp != dp GROUP BY time ORDER BY time"
+        }
+      ]
+    }
+  ]
+}

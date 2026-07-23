@@ -22,3 +22,17 @@ datasources:
     access: proxy
     url: http://loki:3100
     isDefault: false
+
+  # Traffic-flow analytics (docker-compose.flow.yml). Native protocol on 9000.
+  - name: ClickHouse-Flow
+    uid: clickhouse_flow
+    type: grafana-clickhouse-datasource
+    access: proxy
+    jsonData:
+      host: clickhouse
+      port: 9000
+      protocol: native
+      username: ${CH_USER}
+      defaultDatabase: flow
+    secureJsonData:
+      password: ${CH_PASS}

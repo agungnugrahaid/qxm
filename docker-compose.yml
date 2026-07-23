@@ -170,6 +170,11 @@ services:
       # Grafana refuses to start the rendering service with the default
       # token in production mode -- must match the renderer's AUTH_TOKEN.
       GF_RENDERING_RENDERER_TOKEN: ${RENDERER_TOKEN:-changeme}
+      # Traffic-flow analytics live in ClickHouse (docker-compose.flow.yml);
+      # this plugin + datasource surface them alongside the QoE dashboards.
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+      CH_USER: ${CH_USER:-flow}
+      CH_PASS: ${CH_PASS:-flowpass}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
