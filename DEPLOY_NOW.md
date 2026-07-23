@@ -1,6 +1,6 @@
 # Deploy Now — Consolidated Walkthrough
 
-This supersedes the earlier PILOT_SETUP_GUIDE.md, which predates Caddy, backups, the WAN-interface field, the Sites page, and the Grafana dashboard. Follow this one top to bottom for the current stack.
+This supersedes the earlier pilot guide (now archived at `docs/archive/PILOT_SETUP_GUIDE.md`), which predates Caddy, backups, the WAN-interface field, the Sites page, and the Grafana dashboard. Follow this one top to bottom for the current stack.
 
 ## 0. What you're deploying
 
