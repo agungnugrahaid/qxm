@@ -23,6 +23,7 @@ customer's data into a customer-facing document.
 import base64
 import os
 import urllib.request
+import urllib.parse
 from datetime import datetime, timezone, timedelta
 
 import jinja2
@@ -35,6 +36,22 @@ from dashboard_share import share_dashboard_for_customer, slugify
 DATABASE_URL = os.environ["DATABASE_URL"]
 GRAFANA_INTERNAL_URL = "http://grafana:3000"
 GRAFANA_ADMIN_PASSWORD = os.environ.get("GRAFANA_ADMIN_PASSWORD", "admin")
+
+# Traffic-flow analytics live in the sibling flow stack (ClickHouse + the
+# flow-overview Grafana dashboard). Panels render only for customers that
+# actually have flow collection, and the whole section is best-effort -- if
+# ClickHouse is down or a customer has no flows, the report drops it silently.
+CLICKHOUSE_URL = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
+CLICKHOUSE_USER = os.environ.get("CH_USER", "flow")
+CLICKHOUSE_PASSWORD = os.environ.get("CH_PASS", "")
+FLOW_DASHBOARD_UID = "flow-overview"
+# (panel_id, height_px, english_caption, indonesian_caption) on flow-overview,
+# rendered with &var-customer_id=<id>. Panel 3 (the traffic timeseries) is
+# omitted -- the report already has the counter-based Internet Traffic panel.
+REPORT_FLOW_PANELS = [
+    (1, 380, "Top Content Providers", "Konten / Layanan Teratas"),
+    (2, 380, "Top Internal Users", "Pengguna Internal Teratas"),
+]
 
 WIB = timezone(timedelta(hours=7))  # Asia/Jakarta
 
@@ -84,6 +101,20 @@ def get_conn():
     conn = psycopg2.connect(DATABASE_URL)
     conn.cursor_factory = psycopg2.extras.RealDictCursor
     return conn
+
+
+def flow_enabled(customer_id):
+    """True if this customer has traffic-flow collection (an exporter_map row).
+    ClickHouse is a sibling stack; if it's unreachable, return False so the
+    report still generates -- the flow section is a bonus, never a dependency."""
+    try:
+        q = f"SELECT count() FROM flow.exporter_map WHERE customer_id = {int(customer_id)}"
+        creds = urllib.parse.urlencode({"user": CLICKHOUSE_USER, "password": CLICKHOUSE_PASSWORD})
+        req = urllib.request.Request(f"{CLICKHOUSE_URL}/?{creds}", data=q.encode(), method="POST")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return int((resp.read().decode().strip() or "0")) > 0
+    except Exception:
+        return False
 
 
 def render_panel(uid, panel_id, from_ms, to_ms, width=1000, height=500, extra=""):
@@ -392,6 +423,17 @@ def generate_report(customer_id, days=30, start=None, end=None):
     for panel_id, height, en, idn in REPORT_PANELS_HEAD:
         png = render_panel(uid, panel_id, from_ms, to_ms, width=1400, height=int(height * 1.4))
         sections.append(section(png, en, idn))
+    # Traffic composition (only if this customer has flow collection). Rendered
+    # from the shared flow-overview dashboard with customer_id passed explicitly
+    # -- same pattern as the per-router ping panel. Best-effort per panel.
+    if flow_enabled(customer_id):
+        for panel_id, height, en, idn in REPORT_FLOW_PANELS:
+            try:
+                png = render_panel(FLOW_DASHBOARD_UID, panel_id, from_ms, to_ms, width=1400,
+                                   height=int(height * 1.4), extra=f"&var-customer_id={customer_id}")
+                sections.append(section(png, en, idn))
+            except Exception:
+                pass
     for r in ping_routers:
         png = render_panel(uid, PING_PANEL_ID, from_ms, to_ms, width=1400,
                            height=int(PING_PANEL_HEIGHT * 1.4), extra=f"&var-router={r['id']}")

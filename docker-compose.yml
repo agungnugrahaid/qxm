@@ -67,6 +67,9 @@ services:
       SYSLOG_IP: ${SYSLOG_IP:-}
       GRAFANA_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GRAFANA_PUBLIC_URL: ${GRAFANA_PUBLIC_URL:-https://grafana.yourisp.com}
+      # ClickHouse (flow stack) -- for the report's traffic-composition panels.
+      CH_USER: ${CH_USER:-flow}
+      CH_PASS: ${CH_PASS:-flowpass}
       SFTP_ALLOWED_CIDRS: ${SFTP_ALLOWED_CIDRS:-}
       RADIUS_SERVER_1_SECRET: ${RADIUS_SERVER_1_SECRET:-changeme}
       RADIUS_SERVER_2_SECRET: ${RADIUS_SERVER_2_SECRET:-changeme}
@@ -202,6 +205,9 @@ services:
       DATABASE_URL: postgresql://qoe:${DB_PASSWORD:-changeme}@timescaledb:5432/qoe
       GRAFANA_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GRAFANA_PUBLIC_URL: ${GRAFANA_PUBLIC_URL:-https://grafana.yourisp.com}
+      # ClickHouse (flow stack) -- for the report's traffic-composition panels.
+      CH_USER: ${CH_USER:-flow}
+      CH_PASS: ${CH_PASS:-flowpass}
       SMTP_HOST: ${SMTP_HOST:-changeme}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-changeme}
