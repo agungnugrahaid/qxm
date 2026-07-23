@@ -1,0 +1,11 @@
+# Combined goflow2 (IPFIX decoder) + ClickHouse inserter. goflow2's JSON stdout
+# is piped straight into inserter.py -- no Kafka, no spool file, pipe gives
+# backpressure. Based on the goflow2 image (Alpine/musl) so the native binary
+# runs; Python added on top. See FLOW_COLLECTION_PLAN.md.
+FROM netsampler/goflow2:v2.2.2
+USER root
+RUN apk add --no-cache python3 py3-pip gcc musl-dev python3-dev \
+    && pip3 install --no-cache-dir --break-system-packages clickhouse-connect
+COPY inserter.py /inserter.py
+ENTRYPOINT []
+CMD ["sh", "-c", "/goflow2 -listen netflow://:4739 -format json | python3 -u /inserter.py"]

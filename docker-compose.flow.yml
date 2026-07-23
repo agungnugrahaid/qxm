@@ -1,0 +1,57 @@
+# Sibling stack for traffic-flow collection -- see FLOW_COLLECTION_PLAN.md.
+#
+#   docker compose -f docker-compose.flow.yml up -d
+#   docker compose -f docker-compose.flow.yml logs -f flow-collector
+#
+# Own project name so it never treats the main stack's containers as orphans
+# (a stray --remove-orphans here must not touch the QXM containers). Joins the
+# existing qxm_default network so ClickHouse is reachable from Grafana by name.
+name: qxmflow
+
+services:
+  # goflow2 (IPFIX decoder) + inserter in one container: goflow2 JSON stdout is
+  # piped into the inserter, which batch-writes to ClickHouse. Publishes the
+  # IPFIX port the MikroTik /ip traffic-flow targets point at.
+  flow-collector:
+    build:
+      context: ./flow
+      dockerfile: Dockerfile.inserter
+    image: qxm-flow-collector
+    container_name: qxm-flow-collector
+    environment:
+      CH_HOST: clickhouse
+      CH_USER: ${CH_USER:-flow}
+      CH_PASS: ${CH_PASS:-flowpass}
+      CH_DB: flow
+    ports:
+      - "4739:4739/udp"   # IPFIX target for MikroTik /ip traffic-flow. Same
+                          # direct-publish pattern as promtail's 1514/udp syslog.
+    depends_on:
+      - clickhouse
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: qxm-clickhouse
+    environment:
+      CLICKHOUSE_DB: flow
+      CLICKHOUSE_USER: ${CH_USER:-flow}
+      CLICKHOUSE_PASSWORD: ${CH_PASS:-flowpass}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    # No host port publish -- reached internally by Grafana + the inserter on
+    # qxm_default (clickhouse:8123 HTTP / :9000 native).
+    restart: unless-stopped
+
+volumes:
+  clickhouse-data:
+
+networks:
+  default:
+    name: qxm_default
+    external: true

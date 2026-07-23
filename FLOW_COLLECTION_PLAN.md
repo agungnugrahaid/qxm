@@ -178,6 +178,32 @@ obs-domain tag, targeting the VM. Prove:
 
 Gate: attribution correct **and** sampling math correct **and** volume measured.
 
+**Phase 0 results — canary Ro-Agregat-1 (Reseller Wahana), 2026-07-23, unsampled:**
+- **Rate: 207 flows/s** on this single aggregation router (the heavy end of the
+  fleet) — concretely confirms sampling is the right scale lever.
+- **Exporter IP is the NAT egress IP** (`111.68.29.39`), distinct from the
+  router's `mgmt_host` (`58.145.168.153`) — expected, not a bug. **Attribution
+  keys on the flow exporter (NAT) IP**, captured per router; do NOT reuse
+  mgmt_host, and don't assume the ingestion-push source IP matches it either.
+- **`observation_domain_id` = 0** — MikroTik doesn't tag it, so the planned
+  CGNAT disambiguator isn't available out of the box; exporter IP is the key,
+  fine for distinct-IP customers.
+- **WAN-only validated decisively:** 99.9% of flows cross the uplink (34k down +
+  21k up), 0.1% intra-LAN, zero transit.
+- **Per-client visible directly** in `src_addr`/`dst_addr` (MikroTik exports the
+  conntrack pre-NAT addresses). goflow2 does NOT surface MikroTik's `nat-*`
+  fields — and we don't need them.
+- **`src_as`/`dst_as` = 0** (CPE has no BGP table) → ASN enrichment required.
+- **On-net CDN nuance:** the reseller's top destinations are gmedia's own
+  on-net Google/Meta caches (`43.245.187.x`, `112.78.36.x`), which resolve to
+  **AS55666 GMEDIA** — correct but hides that it's Google/Meta content served
+  from local cache. "Top content providers" needs a **curated override**
+  (`cdn_override` table) for known cache ranges; off-net resolves correctly
+  (Meta AS32934, Akamai AS20940, …).
+- Still open: sampling-rate advertisement gate (needs sampling enabled to test).
+
+Enrichment uses the free **iptoasn.com** dataset (no license key), not MaxMind.
+
 ### Phase 1 — Storage shape + one-customer dashboard
 
 - Load the **GeoLite2-ASN dictionary** (`asn_dict`) into ClickHouse + a monthly
