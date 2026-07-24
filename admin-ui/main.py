@@ -73,6 +73,24 @@ RADIUS_CONFIG = {
     "secret1": os.environ.get("RADIUS_SERVER_1_SECRET", "changeme"),
     "secret2": os.environ.get("RADIUS_SERVER_2_SECRET", "changeme"),
 }
+# Traffic-flow (IPFIX) export target -- the QXM flow collector, reachable at
+# the monitor host's public IP on 4739/udp (published by qxm-flow-collector).
+# Defaults to the syslog host since it's the same VM. cache_entries sizes the
+# per-router flow table to device RAM (v6.48.6 canary runs 512k); tune down for
+# low-RAM CPE, up for very large sites. Passed to push_to_router, which applies
+# it only to routers with flow_enabled set (and skips CGNAT). Sampling stays
+# off by default -- byte totals come from interface counters, so it's only a
+# CPU lever for busy routers.
+FLOW_CONFIG = {
+    # `or`-chain, not .get defaults: compose passes FLOW_COLLECTOR_HOST as an
+    # empty string when unset, which would otherwise blank the target instead
+    # of falling back to the (same-VM) syslog host.
+    "target": (os.environ.get("FLOW_COLLECTOR_HOST") or os.environ.get("SYSLOG_HOST") or "monitor.yourisp.com"),
+    "port": os.environ.get("FLOW_COLLECTOR_PORT") or "4739",
+    "cache_entries": os.environ.get("FLOW_CACHE_ENTRIES") or "512k",
+    # Sampling is per-router (routers.flow_sampling_*), read off the row in
+    # deploy_lib -- not a fleet-wide default here.
+}
 # Pre-filled into the Add Router form (not Edit) as the fleet-standard API login.
 ROUTER_API_DEFAULT_USER = os.environ.get("ROUTER_API_DEFAULT_USER", "")
 ROUTER_API_DEFAULT_PASSWORD = os.environ.get("ROUTER_API_DEFAULT_PASSWORD", "")
@@ -469,16 +487,29 @@ def update_router_flow_tier(
     router_id: int,
     flow_enabled: bool = Form(False),
     flow_tier: str = Form(""),
+    sampling_interval: str = Form(""),
+    sampling_space: str = Form(""),
     redirect_to: str = Form(""),
 ):
     tier = flow_tier.strip() or None
     if tier is not None and tier not in VALID_FLOW_TIERS:
         tier = None
+    # Sampling is optional and per-router: a positive interval turns it on,
+    # anything else (blank/0/garbage) = off = full capture, both NULL.
+    interval = space = None
+    try:
+        si = int(sampling_interval)
+        if si > 0:
+            interval = si
+            space = max(int(sampling_space or 0), 0)
+    except ValueError:
+        interval = space = None
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "UPDATE routers SET flow_enabled = %s, flow_tier = %s WHERE id = %s",
-        (flow_enabled, tier, router_id),
+        "UPDATE routers SET flow_enabled = %s, flow_tier = %s, "
+        "flow_sampling_interval = %s, flow_sampling_space = %s WHERE id = %s",
+        (flow_enabled, tier, interval, space, router_id),
     )
     conn.commit()
     conn.close()
@@ -565,6 +596,7 @@ def deploy_and_record(router):
         actual_identity, warnings = push_to_router(
             router, INGEST_BASE_URL, METRICS_TEMPLATES, FIRMWARE_TEMPLATES, SFTP_CONFIG, SYSLOG_CONFIG,
             baseline_templates=BASELINE_TEMPLATES, radius_config=RADIUS_CONFIG, gmedia_cidrs=GMEDIA_CIDRS,
+            flow_config=FLOW_CONFIG,
         )
         renamed_to = sync_identity_name(router["id"], router["identity_name"], actual_identity)
         detail = "deployed" if not renamed_to else f"deployed (identity_name synced: {router['identity_name']!r} -> {renamed_to!r})"

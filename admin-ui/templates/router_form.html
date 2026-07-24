@@ -135,8 +135,23 @@
           <option value="{{ t }}" {% if router.flow_tier == t %}selected{% endif %}>{{ t }}</option>
         {% endfor %}
       </select>
+      <span style="display:flex; align-items:center; gap:0.3rem; font-size:0.82rem; color:var(--on-surface-variant);">
+        sampling
+        <input name="sampling_interval" type="number" min="0" placeholder="off"
+               value="{{ router.flow_sampling_interval if router.flow_sampling_interval else '' }}"
+               title="Packets to sample (interval). Blank/0 = off, full capture."
+               style="width:64px; height:36px; padding:0 0.4rem; font-size:0.85rem;">
+        <span>:</span>
+        <input name="sampling_space" type="number" min="0" placeholder="0"
+               value="{{ router.flow_sampling_space if router.flow_sampling_space is not none else '' }}"
+               title="Packets to skip (space). Sampled fraction = interval/(interval+space)."
+               style="width:64px; height:36px; padding:0 0.4rem; font-size:0.85rem;">
+      </span>
       <button type="submit" class="btn"><i data-lucide="save" style="width:14px; height:14px;"></i> Save</button>
     </form>
+    <p style="font-size: 0.78rem; color: var(--on-surface-variant); margin: -0.75rem 0 1.25rem;">
+      Sampling is for busy routers only (CPU/ingest/storage reducer). Sampled fraction = interval/(interval+space) of packets — e.g. <code>1:99</code> ≈ 1%. Leave blank for full capture; byte totals come from interface counters regardless, so only flow composition loses precision.
+    </p>
     {% if router.flow_tier == "cgnat" %}
       <div class="info-notification warning" style="margin: -0.75rem 0 1.25rem; border-left: 4px solid var(--terracotta); background: #fef3c7; color: #92400e;">
         <strong>CGNAT:</strong> this router shares a public IP with others, so its flows can't be attributed to one customer. Registered exporters below are informational; keep flow off.

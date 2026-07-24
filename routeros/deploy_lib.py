@@ -194,6 +194,99 @@ def upsert_syslog_forwarding(api, remote_host, remote_port):
             list(api(cmd="/system/logging/add", topics=topic, action="remoteloki"))
 
 
+# Trimmed IPFIX field template (the "keep only what a usage report needs"
+# lever). This is exactly the validated v6.48.6 canary set -- an unconfigured
+# router ships all ~36 fields on (v7 default), which bloats every exported
+# record with tcp-seq/ack/window, MACs, ttl, tos, masks etc. that nothing in
+# the pipeline reads. Field names are identical across v6 and v7, so the same
+# set applies to both. Keep: timing, addresses+ports, protocol, byte/packet
+# counts, in/out interface, and the nat-* addresses/ports (harmless, matches
+# the canary). Everything else is turned off.
+IPFIX_FIELDS_ON = frozenset({
+    "bytes", "dst-address", "dst-port", "first-forwarded", "in-interface",
+    "last-forwarded", "nat-dst-address", "nat-dst-port", "nat-src-address",
+    "nat-src-port", "out-interface", "packets", "protocol", "src-address",
+    "src-port",
+})
+
+
+def upsert_traffic_flow(api, interfaces, target_host, target_port,
+                        cache_entries, sampling=None):
+    """
+    Configure /ip traffic-flow to export trimmed IPFIX to the QXM flow
+    collector, mirroring the validated canary config. Three submenus:
+
+      /ip traffic-flow set        -- enable, WAN-only interfaces, cache size,
+                                     timeouts, packet-sampling
+      /ip traffic-flow ipfix set  -- the trimmed field template (IPFIX_FIELDS_ON)
+      /ip traffic-flow target      -- the collector (dst-address:port, ipfix)
+
+    interfaces: comma-separated RouterOS interface list (WAN + backup uplink),
+    e.g. "ether1-wahana" or "ether1,lte1" -- NOT "all" (WAN-only is the whole
+    point; it captures 100% of internet flows and drops intra-LAN noise).
+
+    sampling: None/falsey = packet-sampling off (the default, and what the
+    canary runs -- byte totals come from interface counters anyway, so sampling
+    only trades composition accuracy for CPU on busy routers). Otherwise a dict
+    {"interval": int, "space": int} to sample interval-consecutive packets then
+    skip space (packet fraction interval/(interval+space)).
+    """
+    settings = {
+        "enabled": "yes",
+        "interfaces": interfaces,
+        "cache-entries": cache_entries,
+        "active-flow-timeout": "30m",
+        "inactive-flow-timeout": "15s",
+    }
+    if sampling:
+        settings["packet-sampling"] = "yes"
+        settings["sampling-interval"] = str(sampling["interval"])
+        settings["sampling-space"] = str(sampling["space"])
+    else:
+        settings["packet-sampling"] = "no"
+        settings["sampling-interval"] = "0"
+        settings["sampling-space"] = "0"
+    list(api(cmd="/ip/traffic-flow/set", **settings))
+
+    # Trim the IPFIX template. Set every field toggle the router actually
+    # exposes (yes if in IPFIX_FIELDS_ON, no otherwise) -- reading the schema
+    # first, rather than blindly setting names, is the same defensive pattern
+    # as upsert_syslog_forwarding: it survives any per-build field-name variance
+    # (unknown fields simply get left off the template, which is the goal).
+    current = list(api(cmd="/ip/traffic-flow/ipfix/print"))
+    if current:
+        field_kwargs = {
+            k: ("yes" if k in IPFIX_FIELDS_ON else "no")
+            for k in current[0] if not k.startswith(".")
+        }
+        if field_kwargs:
+            list(api(cmd="/ip/traffic-flow/ipfix/set", **field_kwargs))
+
+    # Point at the collector. Upsert on our (dst-address, port) so re-deploying
+    # is idempotent and we never touch any other traffic-flow target the router
+    # might legitimately have.
+    target_kwargs = {
+        "dst-address": target_host,
+        "port": str(target_port),
+        "version": "ipfix",
+        "src-address": "0.0.0.0",
+        "v9-template-refresh": "20",
+        "v9-template-timeout": "30m",
+        "disabled": "no",
+    }
+    targets = list(api(cmd="/ip/traffic-flow/target/print"))
+    match = next(
+        (t for t in targets
+         if t.get("dst-address") == target_host
+         and str(t.get("port")) == str(target_port)),
+        None,
+    )
+    if match:
+        list(api(cmd="/ip/traffic-flow/target/set", **{".id": match[".id"], **target_kwargs}))
+    else:
+        list(api(cmd="/ip/traffic-flow/target/add", **target_kwargs))
+
+
 def run_script(api, name):
     """
     Fire the script once immediately after deploying, so data shows up
@@ -214,7 +307,7 @@ def run_script(api, name):
 
 def push_to_router(
     router, ingest_base_url, metrics_templates, firmware_templates, sftp_config, syslog_config,
-    baseline_templates=None, radius_config=None, gmedia_cidrs=None,
+    baseline_templates=None, radius_config=None, gmedia_cidrs=None, flow_config=None,
 ):
     """
     router: dict with identity_name, mgmt_host, mgmt_port, admin_user,
@@ -243,6 +336,12 @@ def push_to_router(
     gmedia_cidrs: list of CIDR strings for the gmedia-all-ip allowlist
     (same list as .env's SFTP_ALLOWED_CIDRS -- see qoe-baseline-hardening
     header comment for why this is reused rather than tracked separately).
+
+    flow_config: {"target": <collector host/ip>, "port": 4739,
+    "cache_entries": "512k", "sampling": None} for the traffic-flow (IPFIX)
+    export step -- optional, so callers that don't pass it (bulk_deploy) skip
+    flow entirely. Applied only when the router's flow_enabled is set and its
+    flow_tier isn't cgnat (see upsert_traffic_flow).
 
     Returns (actual_identity, warnings) on success. actual_identity is the
     router's real /system identity name -- callers should write it back
@@ -331,6 +430,43 @@ def push_to_router(
             })
             upsert_script(api, "qoe-baseline-hardening", baseline_src)
             upsert_scheduler(api, "qoe-baseline-hardening", "qoe-baseline-hardening", "1d")
+
+        # Traffic-flow (IPFIX) export -- gated on the Console's flow_enabled
+        # switch, and skipped for CGNAT routers (their flows share a public IP
+        # and can't be attributed to one customer). Only ever ENABLED here:
+        # turning flow off is a deliberate manual step, so a routine deploy
+        # never disables a router's traffic-flow out from under other uses.
+        if flow_config is not None and router.get("flow_enabled"):
+            if router.get("flow_tier") == "cgnat":
+                warnings.append(
+                    "flow_enabled but flow_tier=cgnat -- traffic-flow NOT pushed "
+                    "(a shared/CGNAT public IP can't be attributed to one customer)"
+                )
+            else:
+                flow_ifaces = [i for i in (wan_interface, wan_interface_backup)
+                               if i and i in iface_names]
+                if not flow_ifaces:
+                    warnings.append(
+                        "flow_enabled but no valid WAN interface on the router "
+                        "-- traffic-flow NOT pushed"
+                    )
+                else:
+                    # Sampling is a PER-ROUTER property (busy routers only),
+                    # read off the router row -- not a fleet-wide flow_config
+                    # default. interval 0/None = off (full capture).
+                    sampling = None
+                    si = router.get("flow_sampling_interval")
+                    sp = router.get("flow_sampling_space")
+                    if si and int(si) > 0:
+                        sampling = {"interval": int(si), "space": int(sp or 0)}
+                    upsert_traffic_flow(
+                        api,
+                        interfaces=",".join(flow_ifaces),
+                        target_host=_resolve_ip(flow_config["target"]),
+                        target_port=flow_config.get("port", 4739),
+                        cache_entries=flow_config.get("cache_entries", "512k"),
+                        sampling=sampling,
+                    )
 
         # Best-effort -- the scheduled cycle will still deliver data on its
         # own even if this immediate kick fails (e.g. a slow/flaky router

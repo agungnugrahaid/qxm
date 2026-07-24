@@ -123,7 +123,12 @@ CREATE TABLE routers (
     -- multi-uplink / cgnat (NULL = untriaged). See migration 024, the
     -- router_flow_exporters child table below, and FLOW_COLLECTION_PLAN.md.
     flow_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-    flow_tier TEXT
+    flow_tier TEXT,
+    -- per-router IPFIX packet sampling (busy routers only); maps 1:1 to
+    -- RouterOS sampling-interval/space, NULL = off (full capture). See
+    -- migration 025 and FLOW_COLLECTION_PLAN.md lever 2.
+    flow_sampling_interval INTEGER,
+    flow_sampling_space INTEGER
 );
 
 CREATE TABLE client_metrics (

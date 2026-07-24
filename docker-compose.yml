@@ -70,6 +70,11 @@ services:
       # ClickHouse (flow stack) -- for the report's traffic-composition panels.
       CH_USER: ${CH_USER:-flow}
       CH_PASS: ${CH_PASS:-flowpass}
+      # Traffic-flow (IPFIX) export target the deploy step points routers at;
+      # falls back to SYSLOG_HOST (same VM) when unset. See .env.example.
+      FLOW_COLLECTOR_HOST: ${FLOW_COLLECTOR_HOST:-}
+      FLOW_COLLECTOR_PORT: ${FLOW_COLLECTOR_PORT:-4739}
+      FLOW_CACHE_ENTRIES: ${FLOW_CACHE_ENTRIES:-512k}
       SFTP_ALLOWED_CIDRS: ${SFTP_ALLOWED_CIDRS:-}
       RADIUS_SERVER_1_SECRET: ${RADIUS_SERVER_1_SECRET:-changeme}
       RADIUS_SERVER_2_SECRET: ${RADIUS_SERVER_2_SECRET:-changeme}
