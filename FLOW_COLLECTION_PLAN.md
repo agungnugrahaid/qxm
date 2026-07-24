@@ -63,14 +63,17 @@ router.
    noise, cuts volume and CPE CPU. Not a compromise — better-targeted than
    `interfaces=all` for a usage report.
 
-2. **Sampling** (`packet-sampling=yes`, **RouterOS v7 only** — v6 CPE can't
-   sample) — **tested on the canary 2026-07-24, and it's weaker than hoped.**
-   Semantics (per MikroTik docs): sample `sampling-interval` consecutive packets,
-   skip `sampling-space`, repeat → packet fraction = `interval/(interval+space)`.
-   BUT it samples *packets* while recording a flow if *any* of its packets is
-   sampled, with ~full conntrack counts — so a "1/100" config (`interval=1
-   space=99`) dropped flows/bytes only **~3×**, not 100×, and per-flow byte
-   counts barely changed. Consequences:
+2. **Sampling** (`packet-sampling=yes`) — **tested on the canary 2026-07-24, and
+   it's weaker than hoped.** Availability: MikroTik docs say v7-only, but the
+   canary is **RouterOS 6.48.6 and sampling demonstrably works** — a sustained
+   ~3× flow-rate drop for 15 min after enabling it — so treat it as available on
+   late-v6 too (verify per version rather than trusting the doc). Semantics:
+   sample `sampling-interval` consecutive packets, skip `sampling-space`, repeat
+   → packet fraction = `interval/(interval+space)`. BUT it samples *packets*
+   while recording a flow if *any* of its packets is sampled, with ~full
+   conntrack counts — so a "1/100" config (`interval=1 space=99`) dropped
+   flows/bytes only **~3×**, not 100×, and per-flow byte counts barely changed.
+   Consequences:
    - **Storage saving is modest** (row count ~3×, not the sampling factor) and
      **byte totals can't be recovered by ×rate** — the true-byte factor depends
      on the flow-size distribution and must be calibrated empirically vs the
@@ -78,8 +81,8 @@ router.
      (`sampling_rate` stayed 0), confirming manual handling either way.
    - **So sampling is NOT the primary storage lever** (see Scaling: short raw
      TTL is). It's an optional **CPE-CPU / ingest / network reducer** for busy
-     v7 routers — worth it there because totals come from counters, so
-     approximate composition is fine; skip it on v6 and on light routers.
+     routers — worth it because totals come from counters, so approximate
+     composition is fine; skip it on light routers.
 
 3. **Trimmed IPFIX field template** — the default exports ~36 fields incl.
    `tcp-seq-num`/`tcp-ack-num`/`tcp-window-size`/`src+dst-mac-address`/`ttl`/
@@ -235,7 +238,8 @@ Gate: attribution correct **and** sampling math correct **and** volume measured.
   (Meta AS32934, Akamai AS20940, …).
 - Sampling-rate advertisement gate — **CLOSED (2026-07-24): not advertised**
   (`sampling_rate` stayed 0), and byte scaling is empirical-not-×rate anyway
-  (v7-only; see lever 2). Short raw TTL, not sampling, is the storage lever.
+  (works on the v6.48.6 canary despite the doc's "v7-only"; see lever 2). Short
+  raw TTL, not sampling, is the storage lever.
 
 Enrichment uses the free **iptoasn.com** dataset (no license key), not MaxMind.
 
@@ -295,7 +299,8 @@ The primary lever is a **short raw TTL**: raw is only a drill-down buffer, the
 MVs hold what reports need, and dropping raw from 7 days to **2 days** cuts the
 raw buffer ~3.5× — predictably, at full accuracy, on v6 *and* v7. That alone
 likely brings a mixed fleet's raw buffer to ~45–75 GB. **Sampling is a secondary
-lever** (v7-only) that reduces CPE CPU + ingest + network on the busiest routers,
+lever** (works on late-v6 too, not just v7 — see lever 2) that reduces CPE CPU +
+ingest + network on the busiest routers,
 but — per lever 2, tested 2026-07-24 — its storage saving is modest (~3×, not the
 sampling factor) and its byte figures are approximate, so it's not what makes
 500 routers fit. Net: **short raw TTL for storage; sampling only to spare CPU on
@@ -324,12 +329,13 @@ RAM free, 432 GB disk free, 8 vCPU near-idle).
 
 ## v6 vs v7 note
 
-Two v6/v7 differences in the traffic-flow step: (1) `cache-entries` default
-(v6 64k / v7 1M — set explicitly per router class), and (2) **`packet-sampling`
-is v7-only** — v6 CPE always run unsampled, so their only storage lever is the
-raw TTL. The IPFIX field template is otherwise identical, so the rest (dual
-NAT-address export, trimmable fields) applies to both. Milder than the RouterOS
-*scripts*, where v7 syntax hard-fails the v6 parser and each file needs a real
+The main v6/v7 difference in the traffic-flow step is the `cache-entries`
+default (v6 64k / v7 1M — set explicitly per router class). `packet-sampling`
+is NOT v6/v7-split as the doc implies: MikroTik docs call it v7-only, but the
+v6.48.6 canary samples fine (verify per version). The IPFIX field template is
+identical across versions, so the rest (dual NAT-address export, trimmable
+fields) applies to both. Milder than the RouterOS *scripts*, where v7 syntax
+hard-fails the v6 parser and each file needs a real
 split — but the step still branches on version for cache-entries and sampling.
 
 ## Open questions
@@ -337,7 +343,8 @@ split — but the step still branches on version for cache-entries and sampling.
 1. ~~Does MikroTik advertise the sampling rate?~~ **Answered 2026-07-24: no**
    (`sampling_rate` = 0), and byte estimates can't be recovered by ×rate anyway
    (samples packets but records full conntrack counts) — calibrate empirically
-   if ever used. Sampling is v7-only. See lever 2 / Scaling.
+   if ever used. (Sampling works on the v6.48.6 canary despite the doc's
+   "v7-only".) See lever 2 / Scaling.
 2. ~~`sampling-interval`/`sampling-space` semantics?~~ **Answered:** sample
    `interval` consecutive packets, skip `space`, repeat → packet fraction
    `interval/(interval+space)`; but flow-count/byte reduction is far milder
