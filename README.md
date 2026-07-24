@@ -28,24 +28,30 @@ top; jump to a group when you need it. (Ordering lives here, not in filenames �
 so nothing has to be renamed when docs are added.)
 
 **Start here**
+
 1. This README — what the stack is and how the pieces fit.
 2. **[DEPLOY_NOW.md](DEPLOY_NOW.md)** — current, consolidated deploy walkthrough. Begin with `cp .env.example .env`, then follow it for DNS, Caddy domains, and bringing the stack up.
 
 **Set up / deploy**
+
 3. **[DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md)** — placeholders that need real values before this is live, including the SFTP firewall allowlist (`deploy/setup-sftp-firewall.sh`) — the SFTP port gets found and brute-forced within days if left open to the whole internet.
 4. **[routeros/README.md](routeros/README.md)** — RouterOS-side details: the v6/v7 script split, device-mode unlock on 7.17+ CPE, `api-ssl` setup, DNS reachability check, DHCP pool math, and how the daily config snapshot gets pushed over SFTP.
 
 **Operate**
+
 5. **[LOGGING_AND_ALERTS.md](LOGGING_AND_ALERTS.md)** — Loki/Promtail setup and first alert rules.
 
 **Reference**
+
 6. **[admin-ui/DESIGN.md](admin-ui/DESIGN.md)** — the "Lumina Console" design system: source-of-truth color tokens (`--primary`, `--on-surface-variant`, `--terracotta`, …) that `admin-ui/static/dashboard.css` and the templates reference. Read before adding UI pages so they stay visually consistent.
 7. **[PRODUCTION_VM_SIZING.md](PRODUCTION_VM_SIZING.md)** — sizing guidance beyond pilot scale.
 
 **Integration contracts**
+
 8. **[ERP_SLA_API.md](ERP_SLA_API.md)** — the SLA/ticket API contract handed to the ERP developer (keyed by `customers.external_id`); manual entry in admin-ui is the fallback until it exists.
 
 **Plans (not yet built)**
+
 9. **[FLOW_COLLECTION_PLAN.md](FLOW_COLLECTION_PLAN.md)** — phased plan for adding per-customer traffic-flow (NetFlow/IPFIX → goflow2 → ClickHouse) content-provider + top-user insights.
 
 **Superseded / history**
