@@ -85,18 +85,40 @@ router.
    reduces the needed value.
 
 **Per-customer attribution** (the piece that makes this QXM-native, not a
-generic flow tool):
-- Map `exporter_ip → routers → customer_id`. Kept fresh **automatically** from
-  the public source IP the ingestion-api already sees on every 5-min metrics
-  push — self-heals when a customer's dynamic NAT IP changes.
-- Disambiguator for shared/CGNAT public IPs: provision a **unique NetFlow
-  observation-domain / engine-id per router** at deploy time and attribute on
-  that. Cheap to bake in now, painful to retrofit — so it's in the schema from
-  Phase 0 even though 19 routers don't strictly need it.
-- Per-**client** breakdown works even WAN-only, because the IPFIX template
+generic flow tool). Flow export is **IP-identified, not token-authenticated** —
+unlike the metrics push, which uses a token *precisely because* CPE sit behind
+NAT. So flow attribution inherits the NAT problem the metrics path was built to
+dodge, and the design must handle it head-on:
+
+- **Range-set per router, not a single IP.** A router with main/backup/LTE
+  uplinks masquerades each uplink to its *own* public IP, and export packets
+  take whichever uplink routing/failover picks — so one router presents a *set*
+  of exporter IPs over time. Model attribution as a **range-lookup dictionary**
+  (same pattern as `asn`/`cdn_override`): `(ip_start, ip_end) → customer`, a
+  `/32` per known uplink IP or a CIDR per block. Source of truth is Postgres: a
+  per-router **`router_flow_exporters(router_id, ip_start, ip_end)`** child
+  table, synced into the ClickHouse dictionary. (Supersedes the earlier
+  single-`flow_exporter_ip`-column idea.)
+- **Learn-and-flag** for IPs you can't know up front (a backup uplink's public
+  IP only appears on failover): a periodic check surfaces any exporter IP in
+  `flows_raw` not covered by the map as "unattributed — assign me"; the operator
+  maps it (→ Postgres). Catches new/backup IPs the first time they're used.
+- **CGNAT is the hard limit — tier routers by attribution feasibility.** If
+  several customers share a NAT public IP (CGNAT / uncontrolled upstream NAT),
+  their flows carry the *same* exporter IP and cannot be told apart from the flow
+  alone (ranges don't help — one IP maps to many customers). Options, best to
+  worst: (a) a unique in-packet tag that survives NAT — `observation_domain_id` /
+  engine-id — **but MikroTik emits 0 and exposes no setting; confirm on current
+  ROS whether it's settable, as it'd be the clean fix**; (b) ride flow export over
+  the router's **management tunnel** (WireGuard/IPsec) so the source is the
+  unique, stable inner IP — the flow analogue of the metrics token, robust but
+  heavier; (c) per-router destination port (doesn't scale); (d) **exclude** pure-
+  CGNAT sites from per-customer flow (site-level aggregate only). Tag each router
+  `public-distinct` / `multi-uplink` / `cgnat`; fleet rollout enables flow only
+  where it's attributable.
+- **Per-client breakdown works even WAN-only**, because the IPFIX template
   exports both `src-address` (pre-NAT internal client) and `nat-src-address`
-  (post-NAT public) in the same record. (Confirmed present in both v6 and v7
-  default templates; still a Phase 0 eyeball check.)
+  (post-NAT public) in the same record. (Confirmed in both v6 and v7 templates.)
 
 **Content-provider enrichment** (turns destination IPs into names):
 - The flow record carries only the raw destination IP — no ASN, no provider,
@@ -239,8 +261,30 @@ The design is additive to 500 routers; ClickHouse is more justified at scale,
 not less. Build these two now because they're painful to retrofit; treat the
 rest as documented triggers:
 
-**Build now (Phase 0):** obs-domain attribution key in the schema; instrument
-the pilot to measure flows/sec.
+**Build now (Phase 0):** the range-set attribution model above (painful to
+retrofit once you've collected mislabeled data); instrument the pilot to measure
+flows/sec.
+
+**Measured on the canary** (one aggregation router = the heavy end, unsampled):
+~240 flows/s → **389 MiB compressed / 25 h** in `flows_raw` (~18.5 B/row) ≈
+**~2.5 GB per heavy router for the 7-day raw buffer**. The 13-month rollup MVs
+for that same router are **~125 KiB** — because they're bounded by *aggregation
+cardinality* (routers × providers/users × hours), **not** by flow rate. That
+split is the whole storage story:
+- **Long-term (13-month MVs):** ~10–15 GB at 500 routers *regardless of
+  sampling* — trivial. Sampling only turns the byte counts into scaled estimates.
+- **Short-term (7-day raw buffer) + ingest CPU + CPE CPU + collector network:**
+  scales with raw flow rate × 500. Unsampled, an all-heavy fleet ≈ **1.25 TB raw
+  + ~120k flows/s** (over the VM); a lighter mixed fleet (~50 flows/s avg) ≈
+  **150–260 GB raw + ~25k flows/s** (a large fraction of the 428 GB free).
+
+Two levers keep 500 routers on the current VM: **sampling** (cuts raw + ingest +
+CPE-CPU + network by the sampling factor) and a **short raw TTL** (raw is only a
+drill-down buffer; the MVs hold what reports need — 1–2 days is plenty). With
+1/100 sampling + a 2-day raw TTL, 500 routers is comfortable on the current box.
+Sampling is **not needed at canary scale** (it'd only hide ground truth); it's a
+**fleet-rollout prerequisite**, gated on first closing the "does MikroTik
+advertise the sampling rate to goflow2" question (a small canary test).
 
 **Turn on when the measured rate crosses the threshold:**
 - **Buffer (Kafka/Redpanda/NATS)** between collectors and ClickHouse — the
@@ -253,12 +297,9 @@ the pilot to measure flows/sec.
   makes this a host move (repoint Grafana at a remote ClickHouse), not a
   redesign.
 
-Volume projection is an order-of-magnitude uncertain until the pilot measures —
-at 500 routers, raw flows could be anywhere from ~26 to ~100+ GB/day *before*
-sampling, which is exactly why sampling + short raw TTL + aggregate-only reports
-are baked in. And note 500 routers stresses all of QXM (TimescaleDB, the
-single-VM premise, the Ruijie 5000/day quota that's already the fleet cap) —
-plan flow capacity as part of a holistic 500-router pass, not in isolation.
+Note 500 routers stresses all of QXM (TimescaleDB, the single-VM premise, the
+Ruijie 5000/day quota that's already the fleet cap) — plan flow capacity as part
+of a holistic 500-router pass, not in isolation.
 
 ## Resource budget (current fleet)
 
