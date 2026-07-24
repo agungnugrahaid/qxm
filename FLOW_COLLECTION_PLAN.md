@@ -63,12 +63,23 @@ router.
    noise, cuts volume and CPE CPU. Not a compromise — better-targeted than
    `interfaces=all` for a usage report.
 
-2. **Sampling** (`packet-sampling=yes`) — start conservative (e.g. 1/100), tune
-   from the pilot's measured flows/sec. Acceptable because totals come from
-   counters and the elephants that dominate a top-talkers report survive
-   sampling; the mouse flows we lose wouldn't be listed anyway. This is the
-   lever that dissolves the 500-router walls (flows/sec, CPE CPU, storage all
-   drop by the sampling factor, and cache pressure with it).
+2. **Sampling** (`packet-sampling=yes`, **RouterOS v7 only** — v6 CPE can't
+   sample) — **tested on the canary 2026-07-24, and it's weaker than hoped.**
+   Semantics (per MikroTik docs): sample `sampling-interval` consecutive packets,
+   skip `sampling-space`, repeat → packet fraction = `interval/(interval+space)`.
+   BUT it samples *packets* while recording a flow if *any* of its packets is
+   sampled, with ~full conntrack counts — so a "1/100" config (`interval=1
+   space=99`) dropped flows/bytes only **~3×**, not 100×, and per-flow byte
+   counts barely changed. Consequences:
+   - **Storage saving is modest** (row count ~3×, not the sampling factor) and
+     **byte totals can't be recovered by ×rate** — the true-byte factor depends
+     on the flow-size distribution and must be calibrated empirically vs the
+     interface counters. Also the rate is **not advertised** to goflow2
+     (`sampling_rate` stayed 0), confirming manual handling either way.
+   - **So sampling is NOT the primary storage lever** (see Scaling: short raw
+     TTL is). It's an optional **CPE-CPU / ingest / network reducer** for busy
+     v7 routers — worth it there because totals come from counters, so
+     approximate composition is fine; skip it on v6 and on light routers.
 
 3. **Trimmed IPFIX field template** — the default exports ~36 fields incl.
    `tcp-seq-num`/`tcp-ack-num`/`tcp-window-size`/`src+dst-mac-address`/`ttl`/
@@ -222,7 +233,9 @@ Gate: attribution correct **and** sampling math correct **and** volume measured.
   from local cache. "Top content providers" needs a **curated override**
   (`cdn_override` table) for known cache ranges; off-net resolves correctly
   (Meta AS32934, Akamai AS20940, …).
-- Still open: sampling-rate advertisement gate (needs sampling enabled to test).
+- Sampling-rate advertisement gate — **CLOSED (2026-07-24): not advertised**
+  (`sampling_rate` stayed 0), and byte scaling is empirical-not-×rate anyway
+  (v7-only; see lever 2). Short raw TTL, not sampling, is the storage lever.
 
 Enrichment uses the free **iptoasn.com** dataset (no license key), not MaxMind.
 
@@ -278,13 +291,15 @@ split is the whole storage story:
   + ~120k flows/s** (over the VM); a lighter mixed fleet (~50 flows/s avg) ≈
   **150–260 GB raw + ~25k flows/s** (a large fraction of the 428 GB free).
 
-Two levers keep 500 routers on the current VM: **sampling** (cuts raw + ingest +
-CPE-CPU + network by the sampling factor) and a **short raw TTL** (raw is only a
-drill-down buffer; the MVs hold what reports need — 1–2 days is plenty). With
-1/100 sampling + a 2-day raw TTL, 500 routers is comfortable on the current box.
-Sampling is **not needed at canary scale** (it'd only hide ground truth); it's a
-**fleet-rollout prerequisite**, gated on first closing the "does MikroTik
-advertise the sampling rate to goflow2" question (a small canary test).
+The primary lever is a **short raw TTL**: raw is only a drill-down buffer, the
+MVs hold what reports need, and dropping raw from 7 days to **2 days** cuts the
+raw buffer ~3.5× — predictably, at full accuracy, on v6 *and* v7. That alone
+likely brings a mixed fleet's raw buffer to ~45–75 GB. **Sampling is a secondary
+lever** (v7-only) that reduces CPE CPU + ingest + network on the busiest routers,
+but — per lever 2, tested 2026-07-24 — its storage saving is modest (~3×, not the
+sampling factor) and its byte figures are approximate, so it's not what makes
+500 routers fit. Net: **short raw TTL for storage; sampling only to spare CPU on
+heavy v7 routers.** Neither is needed at canary scale.
 
 **Turn on when the measured rate crosses the threshold:**
 - **Buffer (Kafka/Redpanda/NATS)** between collectors and ClickHouse — the
@@ -309,16 +324,25 @@ RAM free, 432 GB disk free, 8 vCPU near-idle).
 
 ## v6 vs v7 note
 
-The ONLY traffic-flow config difference between v6 and v7 defaults is
-`cache-entries` (v6 64k / v7 1M). The entire IPFIX field template is identical,
-so every finding here (dual NAT-address export, trimmable fields, sampling)
-applies equally to both. Unlike the RouterOS *scripts* — where v7 syntax
-hard-fails the v6 parser and each file needs a real split — the traffic-flow
-step's v6/v7 handling is just "pick the right `cache-entries`."
+Two v6/v7 differences in the traffic-flow step: (1) `cache-entries` default
+(v6 64k / v7 1M — set explicitly per router class), and (2) **`packet-sampling`
+is v7-only** — v6 CPE always run unsampled, so their only storage lever is the
+raw TTL. The IPFIX field template is otherwise identical, so the rest (dual
+NAT-address export, trimmable fields) applies to both. Milder than the RouterOS
+*scripts*, where v7 syntax hard-fails the v6 parser and each file needs a real
+split — but the step still branches on version for cache-entries and sampling.
 
-## Open questions carried into Phase 0
+## Open questions
 
-1. Does MikroTik advertise the sampling rate in an IPFIX options template so
-   goflow2 auto-scales? (else per-exporter manual rate) — **decides byte-estimate accuracy.**
-2. Exact `sampling-interval`/`sampling-space` ratio semantics on the target ROS versions.
-3. Per-router flows/sec across representative site sizes — **drives all sizing and the scale triggers.**
+1. ~~Does MikroTik advertise the sampling rate?~~ **Answered 2026-07-24: no**
+   (`sampling_rate` = 0), and byte estimates can't be recovered by ×rate anyway
+   (samples packets but records full conntrack counts) — calibrate empirically
+   if ever used. Sampling is v7-only. See lever 2 / Scaling.
+2. ~~`sampling-interval`/`sampling-space` semantics?~~ **Answered:** sample
+   `interval` consecutive packets, skip `space`, repeat → packet fraction
+   `interval/(interval+space)`; but flow-count/byte reduction is far milder
+   (~3× for a 1/100 packet config) and distribution-dependent.
+3. Per-router flows/sec across representative site sizes — canary (aggregation
+   router) = ~240/s; still need the fleet distribution — **drives sizing.**
+4. Can MikroTik set a unique `observation_domain_id`/engine-id? (would rescue
+   CGNAT attribution — see Per-customer attribution.) Emits 0 by default.
