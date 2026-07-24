@@ -349,6 +349,58 @@ fields) applies to both. Milder than the RouterOS *scripts*, where v7 syntax
 hard-fails the v6 parser and each file needs a real
 split — but the step still branches on version for cache-entries and sampling.
 
+## NAT / masquerade download attribution (2026-07-24 finding + plan)
+
+**Finding (Grand Ambarrukmo, router 7, exporter 119.2.52.140).** The canary
+(Ro-Agregat-1) routes without masquerade at the observation point, so both flow
+directions carry the pre-NAT private client and "download = dst is a private
+client" just works. **Most CPE masquerade their WAN**, and there the download
+(reply) direction is recorded with `dst = the router's own public IP` (the
+exporter_ip), not the pre-NAT client. Measured: 17.85 GiB / 20 min of download
+landed as `dst = exporter_ip`, **0** as `dst = private` → the dashboard showed
+upload only. The canary was a misleadingly easy case; the WAN-only design and
+the earlier "we don't need the nat-\* fields" note both assumed no NAT.
+
+**Done — #3, totals + providers (shipped 2026-07-24).** `traffic_hourly` and
+`provider_hourly` MVs widened "internal side" to *private client **OR** the
+exporter's own IP* (`sp2`/`dp2` in `flow/materialized_views.sql`). This recovers
+download **volume** (traffic_hourly) and download **providers** (provider_hourly
+reads the provider off the external `src`, which is present) for masquerading
+routers, with no effect on non-NAT routers. `user_hourly` deliberately kept
+strict (`sp != dp`) so a NAT-download is never mis-attributed to the router's own
+IP as a "top user". Applied via drop+recreate the two MVs + truncate/backfill
+(procedure in the MV file). Verified: Grand Ambarrukmo now shows ~44 GiB/hr
+download and real top providers (Meta Cache, Google, Google Cache, Apple, …).
+
+**Plan — #2, per-client download attribution (only remaining gap).** After #3,
+the one thing still missing on NATing routers is **which internal client** did
+the download — Top Internal Users is upload-only there (and download is ~9× upload,
+so that ranking is badly skewed). The client is only in MikroTik's
+`nat-dst-address` field, which the trimmed template exports but goflow2 (v2.2.2,
+default `-format json`) drops. Steps, gated on the first:
+
+1. **Verify the IPFIX encoding (gating unknown).** Confirm which IE MikroTik uses
+   for `nat-dst-address`/`nat-src-address` — standard `postNAT{Source,Destination}
+   IPv4Address` (225/226) vs a MikroTik enterprise IE (PEN 14988) — and that the
+   field actually carries the un-NAT'd client on **reply** flows. Capture via
+   `tcpdump -w` on 4739/udp + decode the template, or run goflow2 with a debug/
+   custom mapping and eyeball. If it's an enterprise IE or unpopulated on reply,
+   #2 isn't viable as-is and CGNAT-style fallbacks apply.
+2. **Surface it in goflow2** via a custom mapping file (`-mapping mapping.yaml`,
+   supported in v2.2.2) mapping the NAT IEs to JSON fields.
+3. **Extend the pipeline:** `inserter.py` extracts `nat_src_addr`/`nat_dst_addr`;
+   add the two columns to `flows_raw` (small; a migration-equivalent CREATE change
+   + note the storage bump against the short raw TTL).
+4. **Use it in `user_hourly`:** for a NAT-download flow (`dst = exporter_ip`), the
+   internal client = `nat_dst_addr`; keep `src_addr` for normal/non-NAT rows.
+   Re-backfill user_hourly.
+5. Watch storage — two more String columns per raw row; reconfirm the raw-TTL math.
+
+**Is #2 needed?** Yes for accurate per-client Top Users on masquerading routers
+(the majority). It's a bigger change than #3 and blocked on step 1's live
+verification, so it's staged separately, not a blocker for rollout — totals and
+providers are already correct fleet-wide.
+
 ## Open questions
 
 1. ~~Does MikroTik advertise the sampling rate?~~ **Answered 2026-07-24: no**
