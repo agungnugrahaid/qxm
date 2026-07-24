@@ -263,10 +263,21 @@ Enrichment uses the free **iptoasn.com** dataset (no license key), not MaxMind.
 
 ### Phase 3 — Fleet rollout
 
-- Add the traffic-flow step to `deploy_lib` (v6/v7 `cache-entries` split;
-  WAN-list from schema; sampling params; trimmed template; per-router
-  obs-domain). Needs the usual v6/v7 handling — but here it's trivial (one
-  number differs), not a syntax split.
+- Add the traffic-flow step to `deploy_lib`: WAN-list from schema, `cache-entries`
+  per router class (v6 64k / v7 1M default), trimmed IPFIX template. (No
+  per-router obs-domain — MikroTik emits 0, not settable.) Optional
+  `packet-sampling` only on the busiest routers as a CPU/ingest reducer (NOT for
+  storage; byte figures become approximate — see lever 2).
+- **Attribution before enabling**: register each router's exporter IP range-set
+  in Postgres (`router_flow_exporters`) and tier it `public-distinct` /
+  `multi-uplink` / `cgnat`; enable flow only where attributable, and stand up the
+  exporter_map sync + "unattributed IP" learn-and-flag (see Per-customer
+  attribution).
+- **Shorten `flows_raw` TTL to 2–3 days** (`ALTER TABLE flows_raw MODIFY TTL
+  ts + INTERVAL 3 DAY`) — the primary storage lever at scale. Currently 7 days
+  (kept longer while the MV pipeline is young, for re-backfill room + bug
+  margin); size the final value to the per-flow lookback the NOC actually wants.
+- Ensure off-site backups include the `clickhouse-data` volume.
 - Roll out selectively: a few routers first, watch CPE CPU and cache eviction,
   then expand. Skip/soften on the busiest or lowest-RAM CPE as needed.
 
