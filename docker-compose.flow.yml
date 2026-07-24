@@ -30,6 +30,26 @@ services:
       - clickhouse
     restart: unless-stopped
 
+  # Keeps flow.exporter_map (attribution) in step with Postgres: reads
+  # router_flow_exporters -> routers -> customers, expands CIDRs, rewrites the
+  # map, and logs any exporter IP seen in flows but not yet attributed.
+  flow-sync:
+    build:
+      context: ./flow
+      dockerfile: Dockerfile.sync
+    image: qxm-flow-sync
+    container_name: qxm-flow-sync
+    environment:
+      DATABASE_URL: postgresql://qoe:${DB_PASSWORD:-changeme}@timescaledb:5432/qoe
+      CH_HOST: clickhouse
+      CH_USER: ${CH_USER:-flow}
+      CH_PASS: ${CH_PASS:-flowpass}
+      CH_DB: flow
+      SYNC_INTERVAL: ${FLOW_SYNC_INTERVAL:-300}
+    depends_on:
+      - clickhouse
+    restart: unless-stopped
+
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
     container_name: qxm-clickhouse

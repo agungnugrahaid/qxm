@@ -351,6 +351,17 @@ ALTER TABLE health_metrics SET (timescaledb.compress, timescaledb.compress_segme
 SELECT add_compression_policy('health_metrics', INTERVAL '3 days', if_not_exists => true);
 SELECT add_retention_policy('health_metrics', INTERVAL '90 days', if_not_exists => true);
 
+-- Per-router flow exporter IP ranges (source of truth for the ClickHouse
+-- flow.exporter_map sync). See db/migrations/023 and FLOW_COLLECTION_PLAN.md.
+CREATE TABLE IF NOT EXISTS router_flow_exporters (
+    id         SERIAL PRIMARY KEY,
+    router_id  INTEGER NOT NULL REFERENCES routers(id) ON DELETE CASCADE,
+    cidr       TEXT NOT NULL,
+    note       TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_router_flow_exporters_router ON router_flow_exporters(router_id);
+
 -- Seed a couple of pilot test rows for the CPE side so the ingestion API
 -- has something to authenticate against right away. Replace with your own
 -- customers/routers once the pilot is working.

@@ -1,0 +1,6 @@
+# flow-sync: keeps ClickHouse flow.exporter_map in step with Postgres
+# (router_flow_exporters -> customers). See sync_exporters.py.
+FROM python:3.11-slim
+RUN pip install --no-cache-dir psycopg2-binary clickhouse-connect
+COPY sync_exporters.py /sync_exporters.py
+CMD ["python", "-u", "/sync_exporters.py"]
