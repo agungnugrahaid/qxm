@@ -99,6 +99,119 @@
     </form>
   </div>
 
+  {% if router %}
+  <div class="card" id="flow" style="max-width: 800px; margin-top: 1.5rem;">
+    <div style="display: flex; align-items: center; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem;">
+      <h2 style="font-size: 1.25rem; margin: 0; display: flex; align-items: center;">
+        <i data-lucide="git-fork" style="width:18px; height:18px; margin-right:0.35rem; color:var(--primary);"></i>
+        Flow Attribution
+      </h2>
+    </div>
+
+    {% if flow_error == "bad_cidr" %}
+      <div class="info-notification warning" style="margin-bottom: 1rem; border-left: 4px solid var(--terracotta); background: #fee2e2; color: var(--terracotta);">
+        <strong>Not added:</strong> that isn't a valid IP or CIDR (e.g. <code>111.68.29.39</code> or <code>111.68.29.0/29</code>).
+      </div>
+    {% elif flow_error == "range_too_big" %}
+      <div class="info-notification warning" style="margin-bottom: 1rem; border-left: 4px solid var(--terracotta); background: #fee2e2; color: var(--terracotta);">
+        <strong>Not added:</strong> that range is larger than {{ 1024 }} addresses — the sync skips ranges that big. Register the specific egress IP(s) instead.
+      </div>
+    {% endif %}
+
+    <p style="font-size: 0.8rem; color: var(--on-surface-variant); margin: 0 0 1rem;">
+      Which NAT egress IP(s) this router presents to the flow collector — the source of truth for per-customer flow attribution. Changes apply within ~5&nbsp;min (the flow-sync loop). Attribution is IP-based, so a router behind CGNAT can't be attributed.
+    </p>
+
+    <!-- On/off + tier -->
+    <form class="inline" method="post" action="/routers/{{ router.id }}/flow-tier" style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:center; margin-bottom: 1.25rem;">
+      <input type="hidden" name="redirect_to" value="{{ redirect_to or '/' }}">
+      <label style="display:flex; align-items:center; gap:0.35rem; font-weight:600; cursor:pointer;">
+        <input type="checkbox" name="flow_enabled" value="true" {% if router.flow_enabled %}checked{% endif %}>
+        Flow enabled
+      </label>
+      <select name="flow_tier" style="height:36px; padding:0 0.5rem; font-size:0.85rem; width:190px;">
+        <option value="" {% if not router.flow_tier %}selected{% endif %}>— tier: untriaged —</option>
+        {% for t in flow_tiers %}
+          <option value="{{ t }}" {% if router.flow_tier == t %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn"><i data-lucide="save" style="width:14px; height:14px;"></i> Save</button>
+    </form>
+    {% if router.flow_tier == "cgnat" %}
+      <div class="info-notification warning" style="margin: -0.75rem 0 1.25rem; border-left: 4px solid var(--terracotta); background: #fef3c7; color: #92400e;">
+        <strong>CGNAT:</strong> this router shares a public IP with others, so its flows can't be attributed to one customer. Registered exporters below are informational; keep flow off.
+      </div>
+    {% endif %}
+
+    <!-- Registered exporter IPs -->
+    <strong style="display:block; font-size: 0.85rem; color: var(--on-surface-variant); margin-bottom: 0.4rem;">Exporter IP ranges</strong>
+    <table style="width: 100%; margin-bottom: 0.75rem;">
+      <thead>
+        <tr><th style="width:32%;">CIDR</th><th>Note</th><th style="width:16%;">Added</th><th style="width:8%;"></th></tr>
+      </thead>
+      <tbody>
+        {% for e in flow_exporters %}
+        <tr>
+          <td><code>{{ e.cidr }}</code></td>
+          <td>{{ e.note or "—" }}</td>
+          <td>{{ e.created_at.strftime('%Y-%m-%d') if e.created_at else "—" }}</td>
+          <td>
+            <form class="inline" method="post" action="/routers/{{ router.id }}/flow-exporters/{{ e.id }}/delete">
+              <input type="hidden" name="redirect_to" value="{{ redirect_to or '/' }}">
+              <button class="btn" type="submit" style="color:var(--terracotta); padding: 0.2rem 0.5rem;" title="Delete">
+                <i data-lucide="trash-2" style="width:13px; height:13px;"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" style="color: var(--on-surface-variant); font-style: italic;">No exporter IPs registered — flow won't be attributed to this customer.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <form class="inline" method="post" action="/routers/{{ router.id }}/flow-exporters" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin-bottom: 1.5rem;">
+      <input type="hidden" name="redirect_to" value="{{ redirect_to or '/' }}">
+      <input name="cidr" placeholder="e.g. 111.68.29.39 or 111.68.29.0/29" required style="width: 260px; height: 36px; padding: 0 0.5rem; font-size: 0.85rem;">
+      <input name="note" placeholder="Note (e.g. LTE backup)" style="width: 200px; height: 36px; padding: 0 0.5rem; font-size: 0.85rem;">
+      <button type="submit" class="btn"><i data-lucide="plus" style="width:14px; height:14px;"></i> Add</button>
+    </form>
+
+    <!-- Learn-and-flag: IPs seen in flows but not yet mapped -->
+    {% if unattributed %}
+    <strong style="display:block; font-size: 0.85rem; color: var(--on-surface-variant); margin-bottom: 0.4rem;">
+      Unattributed exporters seen (last 24h)
+    </strong>
+    <p style="font-size: 0.78rem; color: var(--on-surface-variant); margin: 0 0 0.5rem;">
+      Exporter IPs sending flows that aren't mapped to any router yet. If one is this router's uplink, assign it.
+    </p>
+    <table style="width: 100%;">
+      <thead>
+        <tr><th style="width:30%;">Exporter IP</th><th style="width:14%;">Flows</th><th>First / last seen</th><th style="width:12%;"></th></tr>
+      </thead>
+      <tbody>
+        {% for u in unattributed %}
+        <tr>
+          <td><code>{{ u.ip }}</code></td>
+          <td>{{ "{:,}".format(u.n) }}</td>
+          <td style="font-size: 0.8rem; color: var(--on-surface-variant);">{{ u.first_seen }} &rarr; {{ u.last_seen }}</td>
+          <td>
+            <form class="inline" method="post" action="/routers/{{ router.id }}/flow-exporters">
+              <input type="hidden" name="redirect_to" value="{{ redirect_to or '/' }}">
+              <input type="hidden" name="cidr" value="{{ u.ip }}">
+              <input type="hidden" name="note" value="assigned from unattributed">
+              <button class="btn" type="submit" style="padding: 0.2rem 0.5rem;" title="Assign this IP to this router">
+                <i data-lucide="plus" style="width:13px; height:13px;"></i> Assign
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+  {% endif %}
+
   <script>
     (function () {
       var identityInput = document.querySelector('input[name="identity_name"]');

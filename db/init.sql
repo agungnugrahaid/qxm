@@ -116,7 +116,14 @@ CREATE TABLE routers (
     last_deploy_detail TEXT,
     -- lets a phased rollout ("critical customer first") target a subset
     -- of routers instead of only all-or-nothing.
-    priority TEXT DEFAULT 'standard'
+    priority TEXT DEFAULT 'standard',
+    -- traffic-flow (NetFlow/IPFIX) attribution gating. flow_enabled is the
+    -- Console's on/off switch (deploy_lib's traffic-flow step reads it as a
+    -- gate); flow_tier classes the router's egress as public-distinct /
+    -- multi-uplink / cgnat (NULL = untriaged). See migration 024, the
+    -- router_flow_exporters child table below, and FLOW_COLLECTION_PLAN.md.
+    flow_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    flow_tier TEXT
 );
 
 CREATE TABLE client_metrics (

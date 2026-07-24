@@ -36,12 +36,14 @@ import difflib
 import hashlib
 import hmac
 import html
+import ipaddress
 import os
 import re
 import secrets
 import threading
 import time
 import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
 import psycopg2
@@ -79,6 +81,20 @@ ROUTER_API_DEFAULT_PASSWORD = os.environ.get("ROUTER_API_DEFAULT_PASSWORD", "")
 # reused as the router-side management-access allowlist too, rather than
 # tracked as a second separate list.
 GMEDIA_CIDRS = [c.strip() for c in os.environ.get("SFTP_ALLOWED_CIDRS", "").split(",") if c.strip()]
+
+# ClickHouse (flow stack, sibling compose) -- read-only, for the flow
+# attribution UI's "unattributed exporters" discovery. Same best-effort HTTP
+# pattern as report_lib.flow_enabled: ClickHouse is a bonus, never a page
+# dependency, so any error just yields no rows.
+CLICKHOUSE_URL = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
+CH_USER = os.environ.get("CH_USER", "flow")
+CH_PASS = os.environ.get("CH_PASS", "flowpass")
+# Mirror flow/sync_exporters.py MAX_EXPAND: reject a CIDR here if the sync
+# would silently skip it (otherwise the row is accepted but never attributed).
+FLOW_EXPAND_MAX = 1024
+# Router egress attributability classes (see FLOW_COLLECTION_PLAN.md); cgnat
+# means flows can't be pinned to one customer -> leave flow off.
+VALID_FLOW_TIERS = ("public-distinct", "multi-uplink", "cgnat")
 
 app = FastAPI(title="QXM Console")
 # Vendored assets (simple-datatables) -- served locally rather than from a
@@ -210,6 +226,45 @@ def is_online(last_seen_at):
         return False
     age = datetime.now(timezone.utc) - last_seen_at
     return age.total_seconds() < 15 * 60  # no push in 15 min = flagged offline
+
+
+def _ch_query(sql):
+    """POST a query to ClickHouse's HTTP interface; return rows as lists of
+    string cells (TabSeparated). Caller wraps for best-effort behaviour."""
+    creds = urllib.parse.urlencode({"user": CH_USER, "password": CH_PASS})
+    req = urllib.request.Request(f"{CLICKHOUSE_URL}/?{creds}", data=sql.encode(), method="POST")
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        text = resp.read().decode().strip()
+    return [line.split("\t") for line in text.splitlines()] if text else []
+
+
+def unattributed_exporters():
+    """Exporter IPs seen in flows_raw (last 24h) not covered by exporter_map --
+    the same learn-and-flag the sync logs to stdout, surfaced here for one-click
+    assignment. Best-effort: ClickHouse down/absent -> [] (no error shown)."""
+    try:
+        rows = _ch_query(
+            "SELECT exporter_ip, count() AS n, min(ts), max(ts) "
+            "FROM flow.flows_raw WHERE ts > now()-86400 "
+            "AND exporter_ip NOT IN (SELECT exporter_ip FROM flow.exporter_map) "
+            "GROUP BY exporter_ip ORDER BY n DESC FORMAT TabSeparated"
+        )
+        return [{"ip": r[0], "n": int(r[1]), "first_seen": r[2], "last_seen": r[3]}
+                for r in rows if len(r) == 4]
+    except Exception:
+        return []
+
+
+def _flow_redirect(router_id, redirect_to, error=None):
+    """Back to the router edit page's Flow Attribution section, preserving the
+    original ?redirect_to so Save/Cancel still return where the user came from."""
+    q = {}
+    if redirect_to:
+        q["redirect_to"] = redirect_to
+    if error:
+        q["flow_error"] = error
+    qs = ("?" + urllib.parse.urlencode(q)) if q else ""
+    return RedirectResponse(f"/routers/{router_id}/edit{qs}#flow", status_code=303)
 
 
 @app.get("/")
@@ -360,11 +415,21 @@ def edit_router_form(request: Request, router_id: int, redirect_to: str = "/"):
     router = cur.fetchone()
     cur.execute("SELECT * FROM customers ORDER BY name")
     customers = cur.fetchall()
+    cur.execute(
+        "SELECT id, cidr, note, created_at FROM router_flow_exporters "
+        "WHERE router_id = %s ORDER BY cidr",
+        (router_id,),
+    )
+    flow_exporters = cur.fetchall()
     conn.close()
     return templates.TemplateResponse(
         "router_form.html",
         {"request": request, "router": router, "customers": customers,
-         "redirect_to": _safe_next(redirect_to)}
+         "redirect_to": _safe_next(redirect_to),
+         "flow_exporters": flow_exporters,
+         "flow_tiers": VALID_FLOW_TIERS,
+         "unattributed": unattributed_exporters(),
+         "flow_error": request.query_params.get("flow_error", "")}
     )
 
 
@@ -397,6 +462,66 @@ def update_router(
     conn.commit()
     conn.close()
     return RedirectResponse(_safe_next(redirect_to), status_code=303)
+
+
+@app.post("/routers/{router_id}/flow-tier")
+def update_router_flow_tier(
+    router_id: int,
+    flow_enabled: bool = Form(False),
+    flow_tier: str = Form(""),
+    redirect_to: str = Form(""),
+):
+    tier = flow_tier.strip() or None
+    if tier is not None and tier not in VALID_FLOW_TIERS:
+        tier = None
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE routers SET flow_enabled = %s, flow_tier = %s WHERE id = %s",
+        (flow_enabled, tier, router_id),
+    )
+    conn.commit()
+    conn.close()
+    return _flow_redirect(router_id, redirect_to)
+
+
+@app.post("/routers/{router_id}/flow-exporters")
+def add_flow_exporter(
+    router_id: int,
+    cidr: str = Form(...),
+    note: str = Form(""),
+    redirect_to: str = Form(""),
+):
+    # Validate exactly as the sync will read it (ipaddress + MAX_EXPAND), so a
+    # row the Console accepts is a row the sync can actually attribute.
+    try:
+        net = ipaddress.ip_network(cidr.strip(), strict=False)
+    except ValueError:
+        return _flow_redirect(router_id, redirect_to, error="bad_cidr")
+    if net.num_addresses > FLOW_EXPAND_MAX:
+        return _flow_redirect(router_id, redirect_to, error="range_too_big")
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO router_flow_exporters (router_id, cidr, note) VALUES (%s, %s, %s)",
+        (router_id, str(net), note.strip() or None),
+    )
+    conn.commit()
+    conn.close()
+    return _flow_redirect(router_id, redirect_to)
+
+
+@app.post("/routers/{router_id}/flow-exporters/{row_id}/delete")
+def delete_flow_exporter(router_id: int, row_id: int, redirect_to: str = Form("")):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM router_flow_exporters WHERE id = %s AND router_id = %s",
+        (row_id, router_id),
+    )
+    conn.commit()
+    conn.close()
+    return _flow_redirect(router_id, redirect_to)
 
 
 def sync_identity_name(router_id, current_identity, actual_identity):

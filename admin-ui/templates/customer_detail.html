@@ -294,6 +294,7 @@
             <th>Identity</th>
             <th>Mgmt Host</th>
             <th>WAN Interface</th>
+            <th>Flow</th>
             <th>Priority</th>
             <th>Last Seen</th>
             <th>Actions</th>
@@ -312,6 +313,15 @@
             </td>
             <td>{{ r.mgmt_host or "Behind NAT" }}</td>
             <td>{{ r.wan_interface }}</td>
+            <td>
+              {% if r.flow_tier == 'cgnat' %}
+                <span style="color: #92400e; font-weight: 600;" title="CGNAT — flows can't be attributed">cgnat</span>
+              {% elif r.flow_enabled %}
+                <span style="color: var(--success); font-weight: 600;" title="Flow enabled{% if r.flow_tier %} ({{ r.flow_tier }}){% endif %}">on</span>
+              {% else %}
+                <span style="color: var(--on-surface-variant);" title="Flow off">off</span>
+              {% endif %}
+            </td>
             <td>
               {% if r.priority == 'critical' %}
                 <span style="color: var(--terracotta); font-weight: 600;">critical</span>
