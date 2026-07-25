@@ -103,20 +103,40 @@ def _provider_icon(label):
     """(glyph_char, css_font_class) for a provider label. A brand glyph when we
     recognise the network, a globe otherwise. Matched on the uppercased label;
     cache-qualified checks come first so GOOGLE-CACHE -> YouTube beats the plain
-    GOOGLE rule. Monochrome by design (pure Font Awesome). Fastly/Netflix have
-    no Font Awesome glyph, so they fall through to the globe."""
+    GOOGLE rule. Keys are substrings of the iptoasn ASN name (so AKAMAI-LINODE
+    matches LINODE). Monochrome by design (pure Font Awesome). Networks with no
+    Font Awesome glyph -- Fastly, Akamai, Netflix, Alibaba/Taobao, Shopee,
+    Roblox, and every ISP/CDN -- fall through to the globe. Codepoints are FA6
+    Free PUA, verified against the vendored fa-brands-400.ttf cmap."""
     u = (label or "").upper()
+    # Google family -- cache first (on-net YouTube/Google cache -> YouTube).
     if "GOOGLE" in u and "CACHE" in u:
-        return "", _ICON_BRANDS   # youtube (on-net Google/YouTube cache)
+        return "", _ICON_BRANDS   # youtube
     if "YOUTUBE" in u:
         return "", _ICON_BRANDS   # youtube
     if "GOOGLE" in u:
         return "", _ICON_BRANDS   # google
-    if "META" in u or "FACEBOOK" in u or "INSTAGRAM" in u or "WHATSAPP" in u:
+    # Meta -- Facebook/Instagram/WhatsApp traffic all resolves to the FB ASN.
+    if "META" in u or "FACEBOOK" in u:
         return "", _ICON_BRANDS   # meta
     if "TIKTOK" in u or "BYTEDANCE" in u:
         return "", _ICON_BRANDS   # tiktok
-    return "", _ICON_SOLID        # globe (fastly / gmedia / unknown ASNs)
+    # Other recognisable networks in the fleet's top providers.
+    if "AMAZON" in u or "AWS" in u:
+        return "", _ICON_BRANDS   # amazon
+    if "APPLE" in u:
+        return "", _ICON_BRANDS   # apple
+    if "CLOUDFLARE" in u:
+        return "", _ICON_BRANDS   # cloudflare
+    if "MICROSOFT" in u:
+        return "", _ICON_BRANDS   # microsoft
+    if "TELEGRAM" in u:
+        return "", _ICON_BRANDS   # telegram
+    if "LINODE" in u:
+        return "", _ICON_BRANDS   # linode (Akamai Connected Cloud)
+    if "DIGITALOCEAN" in u:
+        return "", _ICON_BRANDS   # digitalocean
+    return "", _ICON_SOLID        # globe (fastly / akamai / gmedia / ISPs)
 
 # Curated, non-repeated panels. (panel_id, height_px, english_caption,
 # indonesian_caption). The ping graphs (panel 105, repeat-per-router) are
