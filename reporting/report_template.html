@@ -62,6 +62,16 @@
     letter-spacing: 0.05em; color: #737782; margin: 14pt 0 6pt;
   }
   .panel-img { width: 100%; border: 1pt solid #dae3f4; border-radius: 6pt; }
+  /* Font Awesome brand glyphs for the Top Content Providers table. TTFs are
+     vendored in assets/fonts/ + installed as system fonts by the Dockerfiles;
+     fontconfig exposes these exact family names (verified via fc-scan). */
+  .fa-b { font-family: "Font Awesome 6 Brands"; }
+  .fa-s { font-family: "Font Awesome 6 Free"; font-weight: 900; }
+  .pv-icon {
+    display: inline-block; width: 15pt; text-align: center; margin-right: 7pt;
+    font-size: 11pt; color: #1e4b8f; vertical-align: -1pt;
+  }
+  .pv-name { font-size: 9pt; }
   .card {
     background: #ffffff; border: 1pt solid #dae3f4; border-radius: 6pt;
     padding: 11pt 13pt; page-break-inside: avoid;
@@ -194,7 +204,23 @@
 <div class="page">
   <h2 class="section-title">{{ s.title_en }}</h2>
   <p class="section-sub">{{ s.title_id }}</p>
+  {% if s.rows is defined %}
+  <table>
+    <thead>
+      <tr><th>Provider</th><th style="width:24%; text-align:right;">Traffic</th></tr>
+    </thead>
+    <tbody>
+      {% for r in s.rows %}
+      <tr>
+        <td><span class="pv-icon {{ r.icon_font }}">{{ r.icon }}</span><span class="pv-name">{{ r.provider }}</span></td>
+        <td style="text-align:right;">{{ r.bytes_human }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
   <img class="panel-img" src="{{ s.png_uri }}">
+  {% endif %}
 </div>
 {% endfor %}
 

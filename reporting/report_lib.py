@@ -48,8 +48,10 @@ FLOW_DASHBOARD_UID = "flow-overview"
 # (panel_id, height_px, english_caption, indonesian_caption) on flow-overview,
 # rendered with &var-customer_id=<id>. Panel 3 (the traffic timeseries) is
 # omitted -- the report already has the counter-based Internet Traffic panel.
+# Panel 1 (Top Content Providers) is NOT here -- it's rendered as a native
+# branded table (collect_flow_providers) instead of a Grafana PNG so each row
+# can carry its provider's brand glyph.
 REPORT_FLOW_PANELS = [
-    (1, 380, "Top Content Providers", "Konten / Layanan Teratas"),
     (2, 380, "Top Internal Users", "Pengguna Internal Teratas"),
 ]
 
@@ -77,6 +79,44 @@ def _fmt_hms(seconds):
 
 def _png_uri(png_bytes):
     return "data:image/png;base64," + base64.b64encode(png_bytes).decode()
+
+
+def _fmt_bytes(n):
+    """Human byte total (IEC) for the providers table."""
+    n = float(n or 0)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
+        if n < 1024 or unit == "PiB":
+            return (f"{n:.0f} {unit}" if unit in ("B", "KiB") else f"{n:.2f} {unit}")
+        n /= 1024
+
+
+# Font Awesome 6 Free glyphs (PUA codepoints) for the Top Content Providers
+# table. Brand logos live in the Brands face ("Font Awesome 6 Brands"); the
+# globe fallback is in the Solid face ("Font Awesome 6 Free", weight 900). The
+# TTFs are vendored in assets/fonts/ and installed as system fonts by the
+# Dockerfiles (same path as Montserrat), so WeasyPrint finds them via pango.
+_ICON_BRANDS = "fa-b"  # CSS class -> font-family "Font Awesome 6 Brands"
+_ICON_SOLID = "fa-s"   # CSS class -> font-family "Font Awesome 6 Free" (900)
+
+
+def _provider_icon(label):
+    """(glyph_char, css_font_class) for a provider label. A brand glyph when we
+    recognise the network, a globe otherwise. Matched on the uppercased label;
+    cache-qualified checks come first so GOOGLE-CACHE -> YouTube beats the plain
+    GOOGLE rule. Monochrome by design (pure Font Awesome). Fastly/Netflix have
+    no Font Awesome glyph, so they fall through to the globe."""
+    u = (label or "").upper()
+    if "GOOGLE" in u and "CACHE" in u:
+        return "", _ICON_BRANDS   # youtube (on-net Google/YouTube cache)
+    if "YOUTUBE" in u:
+        return "", _ICON_BRANDS   # youtube
+    if "GOOGLE" in u:
+        return "", _ICON_BRANDS   # google
+    if "META" in u or "FACEBOOK" in u or "INSTAGRAM" in u or "WHATSAPP" in u:
+        return "", _ICON_BRANDS   # meta
+    if "TIKTOK" in u or "BYTEDANCE" in u:
+        return "", _ICON_BRANDS   # tiktok
+    return "", _ICON_SOLID        # globe (fastly / gmedia / unknown ASNs)
 
 # Curated, non-repeated panels. (panel_id, height_px, english_caption,
 # indonesian_caption). The ping graphs (panel 105, repeat-per-router) are
@@ -115,6 +155,50 @@ def flow_enabled(customer_id):
             return int((resp.read().decode().strip() or "0")) > 0
     except Exception:
         return False
+
+
+def collect_flow_providers(customer_id, from_ms, to_ms, limit=15):
+    """Top content providers for the period, straight from the ClickHouse
+    provider_hourly rollup -- the same query flow-overview panel 1 runs, but
+    returned as rows so the PDF can render a branded table instead of a flat
+    Grafana PNG. Each row carries a Font Awesome brand glyph via _provider_icon.
+    Best-effort: returns [] on any ClickHouse error, so the caller just drops
+    the section (same posture as flow_enabled). Note the `AS total` alias --
+    ClickHouse rejects `sum(bytes) AS bytes` (String collision)."""
+    from_s = int(from_ms // 1000)
+    to_s = int(to_ms // 1000)
+    q = (
+        "SELECT provider, sum(bytes) AS total FROM flow.provider_hourly "
+        "WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map "
+        f"WHERE customer_id = {int(customer_id)}) "
+        f"AND hour >= toDateTime({from_s}) AND hour < toDateTime({to_s}) "
+        f"GROUP BY provider ORDER BY total DESC LIMIT {int(limit)} "
+        "FORMAT TabSeparated"
+    )
+    try:
+        creds = urllib.parse.urlencode({"user": CLICKHOUSE_USER, "password": CLICKHOUSE_PASSWORD})
+        req = urllib.request.Request(f"{CLICKHOUSE_URL}/?{creds}", data=q.encode(), method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            text = resp.read().decode()
+    except Exception:
+        return []
+    rows = []
+    for line in text.splitlines():
+        provider, tab, total = line.partition("\t")
+        if not tab:
+            continue
+        try:
+            total = int(total)
+        except ValueError:
+            continue
+        icon, icon_font = _provider_icon(provider)
+        rows.append({
+            "provider": provider,
+            "bytes_human": _fmt_bytes(total),
+            "icon": icon,
+            "icon_font": icon_font,
+        })
+    return rows
 
 
 def render_panel(uid, panel_id, from_ms, to_ms, width=1000, height=500, extra=""):
@@ -427,6 +511,16 @@ def generate_report(customer_id, days=30, start=None, end=None):
     # from the shared flow-overview dashboard with customer_id passed explicitly
     # -- same pattern as the per-router ping panel. Best-effort per panel.
     if flow_enabled(customer_id):
+        # Top Content Providers: a native branded table (ClickHouse direct),
+        # not a Grafana PNG, so each provider row carries its brand glyph. Keep
+        # it in panel-1's old position (right after Internet Traffic).
+        prov_rows = collect_flow_providers(customer_id, from_ms, to_ms)
+        if prov_rows:
+            sections.append({
+                "rows": prov_rows,
+                "title_en": "Top Content Providers",
+                "title_id": "Konten / Layanan Teratas",
+            })
         for panel_id, height, en, idn in REPORT_FLOW_PANELS:
             try:
                 png = render_panel(FLOW_DASHBOARD_UID, panel_id, from_ms, to_ms, width=1400,
