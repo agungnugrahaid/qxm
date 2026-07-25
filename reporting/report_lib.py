@@ -430,24 +430,12 @@ def _ts_query(sql, params):
     return rows
 
 
-def _pivot(rows, value_key="value", metric_key="metric", time_key="t"):
-    """Long-format (time, metric, value) rows -> (times, {metric: [values]})
-    aligned on the shared gap-filled time grid."""
-    times, seen = [], set()
-    for r in rows:
-        t = r[time_key]
-        if t not in seen:
-            seen.add(t); times.append(t)
-    idx = {t: i for i, t in enumerate(times)}
-    series = {}
-    for r in rows:
-        m = r[metric_key]
-        series.setdefault(m, [None] * len(times))[idx[r[time_key]]] = r[value_key]
-    return times, series
-
-
 def collect_traffic(customer_id, start, end):
-    """Panel 10 -- aggregate uplink download/upload (bits/sec)."""
+    """Panel 10 -- aggregate uplink download/upload (bits/sec). Stays on RAW (no
+    cagg): uplink_metrics is small so this is already ~0.2s, and it's polled ~per
+    5-min bucket, so a first()/last()-per-bucket cagg has first==last (zero delta)
+    in most buckets and undercounts ~2x. The per-poll LAG (which crosses bucket
+    boundaries) is needed and exact -- matches the dashboard."""
     sql = """
         WITH deltas AS (
           SELECT um.router_id, um.uplink_label, um.time,
@@ -468,13 +456,12 @@ def collect_traffic(customer_id, start, end):
 
 
 def collect_path(router_id, start, end):
-    """Panel 105 -- per-router latency / jitter / loss, per target. Single scan
-    (the dashboard UNIONs three scans of path_metrics; one pass is ~3x faster),
-    reshaped into '<target> latency/jitter/loss' series."""
+    """Panel 105 -- per-router latency / jitter / loss per target, from the
+    path_metrics_5m rollup, reshaped into '<target> latency/jitter/loss' series."""
     sql = """
-        SELECT time_bucket_gapfill('5 minutes', time, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
-               target_name, avg(rtt_avg_ms) AS latency, avg(jitter_ms) AS jitter, avg(packet_loss_pct) AS loss
-        FROM path_metrics WHERE router_id = %(router_id)s AND time BETWEEN %(start)s AND %(end)s
+        SELECT time_bucket_gapfill('5 minutes', bucket, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
+               target_name, avg(latency) AS latency, avg(jitter) AS jitter, avg(loss) AS loss
+        FROM path_metrics_5m WHERE router_id = %(router_id)s AND bucket BETWEEN %(start)s AND %(end)s
         GROUP BY 1, target_name ORDER BY 1
     """
     rows = _ts_query(sql, {"router_id": router_id, "start": start, "end": end})
@@ -486,37 +473,51 @@ def collect_path(router_id, start, end):
     series = {}
     for r in rows:
         for metric in ("latency", "jitter", "loss"):
-            series.setdefault(f"{r['target_name']} {metric}", [None] * len(times))[idx[r["t"]]] = r[metric]
+            key = f"{r['target_name']} {metric}"
+            if key not in series:
+                series[key] = [None] * len(times)
+            series[key][idx[r["t"]]] = r[metric]
     return times, series
 
 
 def collect_resource(customer_id, start, end):
-    """Panel 9 -- per-router CPU / RAM / Disk %."""
+    """Panel 9 -- per-router CPU / RAM / Disk %, from the router_metrics_5m
+    rollup (RAM%/Disk% derived from the stored component averages). One scan,
+    reshaped into '<router> CPU/RAM/Disk %' series."""
     sql = """
-        SELECT time_bucket_gapfill('5 minutes', rm.time, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
-               r.identity_name || ' CPU %%' AS metric, avg(rm.cpu_load_pct) AS value
-        FROM router_metrics rm JOIN routers r ON r.id = rm.router_id
-        WHERE r.customer_id = %(customer_id)s AND rm.time BETWEEN %(start)s AND %(end)s GROUP BY 1, r.identity_name
-        UNION ALL
-        SELECT time_bucket_gapfill('5 minutes', rm.time, %(start)s::timestamptz, %(end)s::timestamptz),
-               r.identity_name || ' RAM %%', avg(CASE WHEN rm.ram_total_bytes > 0 THEN 100.0 * rm.ram_used_bytes / rm.ram_total_bytes END)
-        FROM router_metrics rm JOIN routers r ON r.id = rm.router_id
-        WHERE r.customer_id = %(customer_id)s AND rm.time BETWEEN %(start)s AND %(end)s GROUP BY 1, r.identity_name
-        UNION ALL
-        SELECT time_bucket_gapfill('5 minutes', rm.time, %(start)s::timestamptz, %(end)s::timestamptz),
-               r.identity_name || ' Disk %%', avg(CASE WHEN rm.disk_total_bytes > 0 THEN 100.0 * rm.disk_used_bytes / rm.disk_total_bytes END)
-        FROM router_metrics rm JOIN routers r ON r.id = rm.router_id
-        WHERE r.customer_id = %(customer_id)s AND rm.time BETWEEN %(start)s AND %(end)s GROUP BY 1, r.identity_name
-        ORDER BY 1
+        SELECT time_bucket_gapfill('5 minutes', rm.bucket, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
+               r.identity_name AS router,
+               avg(rm.cpu) AS cpu,
+               avg(CASE WHEN rm.ram_total > 0 THEN 100.0 * rm.ram_used / rm.ram_total END) AS ram,
+               avg(CASE WHEN rm.disk_total > 0 THEN 100.0 * rm.disk_used / rm.disk_total END) AS disk
+        FROM router_metrics_5m rm JOIN routers r ON r.id = rm.router_id
+        WHERE r.customer_id = %(customer_id)s AND rm.bucket BETWEEN %(start)s AND %(end)s
+        GROUP BY 1, r.identity_name ORDER BY 1
     """
-    return _pivot(_ts_query(sql, {"customer_id": customer_id, "start": start, "end": end}))
+    rows = _ts_query(sql, {"customer_id": customer_id, "start": start, "end": end})
+    times, seen = [], set()
+    for r in rows:
+        if r["t"] not in seen:
+            seen.add(r["t"]); times.append(r["t"])
+    idx = {t: i for i, t in enumerate(times)}
+    series = {}
+    for r in rows:
+        for label, key in (("CPU %", "cpu"), ("RAM %", "ram"), ("Disk %", "disk")):
+            name = f"{r['router']} {label}"
+            if name not in series:
+                series[name] = [None] * len(times)
+            series[name][idx[r["t"]]] = r[key]
+    return times, series
 
 
 def collect_clients(customer_id, start, end):
-    """Panel 6 -- distinct Wi-Fi clients per 5-min bucket over time. The
-    dashboard uses a correlated subquery with a 15-min rolling window
-    (count(DISTINCT) per point) that is ~9 s at report scale; a single-scan
-    per-bucket distinct is ~30x faster and shows the same daily rhythm."""
+    """Panel 6 -- distinct Wi-Fi clients per 5-min bucket over time. This one
+    stays on RAW (no cagg): count(DISTINCT client_mac) across a customer's sites
+    can't be pre-aggregated per-site without double-counting MACs seen on more
+    than one of the customer's sites -- a per-site-sum cagg matched the median
+    bucket but overcounted busy/overlapping buckets up to ~2x, and TimescaleDB
+    core has no distinct rollup (no toolkit hyperloglog). It's the one ~3s
+    collector for big customers; exact and matches the dashboard."""
     sql = """
         SELECT time_bucket_gapfill('5 minutes', cm.time, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
                count(DISTINCT cm.client_mac) AS clients
@@ -528,13 +529,17 @@ def collect_clients(customer_id, start, end):
 
 
 def collect_wifi_quality(customer_id, start, end):
-    """Panel 7 -- avg signal (dBm), satisfaction (%), retry (%)."""
+    """Panel 7 -- avg signal (dBm), satisfaction (%), retry (%), from the
+    wifi_quality_5m rollup. Averages are weighted across the customer's sites via
+    the stored sums+counts (an avg of per-site averages would misweight).
+    Satisfaction keeps UniFi's -1 'unknown', matching the current panel."""
     sql = """
-        SELECT time_bucket_gapfill('5 minutes', cm.time, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
-               avg(cm.signal) AS avg_signal, avg(cm.satisfaction) AS avg_satisfaction,
-               100.0 * sum(cm.tx_retries) / NULLIF(sum(cm.wifi_tx_attempts), 0) AS retry_pct
-        FROM client_metrics cm JOIN sites s ON s.id = cm.site_id
-        WHERE s.customer_id = %(customer_id)s AND cm.time BETWEEN %(start)s AND %(end)s GROUP BY 1 ORDER BY 1
+        SELECT time_bucket_gapfill('5 minutes', w.bucket, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
+               sum(w.sig_sum)::numeric / NULLIF(sum(w.sig_cnt), 0) AS avg_signal,
+               sum(w.sat_sum)::numeric / NULLIF(sum(w.sat_cnt), 0) AS avg_satisfaction,
+               100.0 * sum(w.retries) / NULLIF(sum(w.attempts), 0) AS retry_pct
+        FROM wifi_quality_5m w JOIN sites s ON s.id = w.site_id
+        WHERE s.customer_id = %(customer_id)s AND w.bucket BETWEEN %(start)s AND %(end)s GROUP BY 1 ORDER BY 1
     """
     rows = _ts_query(sql, {"customer_id": customer_id, "start": start, "end": end})
     return ([r["t"] for r in rows],
