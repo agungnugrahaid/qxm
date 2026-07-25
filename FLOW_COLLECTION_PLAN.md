@@ -84,6 +84,33 @@ router.
      routers — worth it because totals come from counters, so approximate
      composition is fine; skip it on light routers.
 
+   **v7 update — 2026-07-24, Grand Ambarrukmo (RouterOS 7.16.1), 1:99.** The
+   reduction is **far stronger than v6**: ~26× average (~50× off the peak),
+   3,850→~140 flows/s, holding steady — this hot router dropped to canary scale.
+   The mechanism explains both: a flow is kept if **any** of its packets is
+   sampled, so effectiveness is **flow-size-distribution-dependent**. Long
+   multi-packet flows almost always have a sampled packet (v6's weak ~3× was on
+   normal traffic); **single-packet flows** (this router's volume is dominated
+   by one host's P2P/SYN churn) have only a ~1% catch chance → dropped wholesale.
+   Net: sampling is a **strong** lever exactly where it's needed (busy routers
+   drowning in tiny-flow churn), weak on clean multi-packet traffic — so decide
+   per-router (routers.flow_sampling_*), not fleet-wide. `sampling_rate` still 0
+   (not advertised). **Composition preserved** (big multi-packet download flows
+   survive — top providers unchanged); **flow-derived byte VOLUME undercounts**
+   on a sampled router (we drop ~96% of flows, survivors keep full counts) — fine
+   by design, totals come from interface counters, but don't read the flow
+   dashboard's GiB as absolute for a sampled router.
+
+   **Config changes emit a one-time garbage burst.** Any `/ip traffic-flow`
+   config change regenerates the IPFIX template (and every deploy_lib push does),
+   and goflow2 decodes a short burst against the in-flight template → malformed
+   records (Grand Ambarrukmo: 21 rows at the sampling-enable instant — reserved
+   addresses, near-UInt64-max byte/packet counts). They're filtered out of the
+   rollup MVs (both-public → neither up nor down) but land in `flows_raw`.
+   `inserter.py` now drops records over sane caps (MAX_BYTES 10 TB / MAX_PACKETS
+   10 B) so this never reaches storage; a `dropped=` counter surfaces it in the
+   collector log.
+
 3. **Trimmed IPFIX field template** — the default exports ~36 fields incl.
    `tcp-seq-num`/`tcp-ack-num`/`tcp-window-size`/`src+dst-mac-address`/`ttl`/
    `tos`, none of which feed a usage report. Keep only: `first-forwarded`,
