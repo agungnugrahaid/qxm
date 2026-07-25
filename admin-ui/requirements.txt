@@ -5,3 +5,4 @@ python-multipart==0.0.9
 psycopg2-binary==2.9.9
 librouteros==3.4.1
 weasyprint==63.1
+matplotlib==3.9.2

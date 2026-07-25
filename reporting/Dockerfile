@@ -13,6 +13,7 @@ COPY reporting/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY reporting/report_lib.py .
+COPY reporting/charts.py .
 COPY reporting/reporter.py .
 COPY reporting/report_template.html .
 COPY reporting/assets/ ./assets/

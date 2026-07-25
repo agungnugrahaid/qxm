@@ -24,6 +24,7 @@ COPY routeros/qoe-baseline-hardening-v7.rsc ./qoe-baseline-hardening-v7.rsc
 COPY routeros/qoe-baseline-hardening-v6.rsc ./qoe-baseline-hardening-v6.rsc
 # Shared PDF-report logic (also used by the reporter container).
 COPY reporting/report_lib.py ./report_lib.py
+COPY reporting/charts.py ./charts.py
 COPY reporting/report_template.html ./report_template.html
 COPY reporting/assets/ ./assets/
 

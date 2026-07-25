@@ -31,29 +31,17 @@ import psycopg2
 import psycopg2.extras
 from weasyprint import HTML
 
-from dashboard_share import share_dashboard_for_customer, slugify
+import charts
+from dashboard_share import slugify
 
 DATABASE_URL = os.environ["DATABASE_URL"]
-GRAFANA_INTERNAL_URL = "http://grafana:3000"
-GRAFANA_ADMIN_PASSWORD = os.environ.get("GRAFANA_ADMIN_PASSWORD", "admin")
 
-# Traffic-flow analytics live in the sibling flow stack (ClickHouse + the
-# flow-overview Grafana dashboard). Panels render only for customers that
-# actually have flow collection, and the whole section is best-effort -- if
-# ClickHouse is down or a customer has no flows, the report drops it silently.
+# Traffic-flow analytics live in the sibling flow stack (ClickHouse). The flow
+# section is best-effort -- if ClickHouse is down or a customer has no flows,
+# the report drops it silently.
 CLICKHOUSE_URL = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER = os.environ.get("CH_USER", "flow")
 CLICKHOUSE_PASSWORD = os.environ.get("CH_PASS", "")
-FLOW_DASHBOARD_UID = "flow-overview"
-# (panel_id, height_px, english_caption, indonesian_caption) on flow-overview,
-# rendered with &var-customer_id=<id>. Panel 3 (the traffic timeseries) is
-# omitted -- the report already has the counter-based Internet Traffic panel.
-# Panel 1 (Top Content Providers) is NOT here -- it's rendered as a native
-# branded table (collect_flow_providers) instead of a Grafana PNG so each row
-# can carry its provider's brand glyph.
-REPORT_FLOW_PANELS = [
-    (2, 380, "Top Internal Users", "Pengguna Internal Teratas"),
-]
 
 WIB = timezone(timedelta(hours=7))  # Asia/Jakarta
 
@@ -141,25 +129,6 @@ def _provider_icon(label):
         return "", _ICON_BRANDS   # roblox-creator-studio
     return "", _ICON_SOLID        # globe (fastly / akamai / gmedia / ISPs)
 
-# Curated, non-repeated panels. (panel_id, height_px, english_caption,
-# indonesian_caption). The ping graphs (panel 105, repeat-per-router) are
-# rendered separately per router in generate_report -- d-solo renders a
-# repeat panel fine when the variable is passed as &var-router=<id>. The
-# AP list is a native PDF table (collect_ap_rows), not a panel image: a
-# table image cuts off at the render height (~10 rows), and a hotel site
-# can have 300+ APs.
-REPORT_PANELS_HEAD = [
-    (10, 500, "Internet Traffic (All Routers Combined)", "Trafik Internet (Gabungan Semua Router)"),
-]
-PING_PANEL_ID = 105
-PING_PANEL_HEIGHT = 450
-REPORT_PANELS_TAIL = [
-    (9, 500, "Router Resource Usage (CPU / RAM / Disk)", "Penggunaan Sumber Daya Router (CPU / RAM / Disk)"),
-    (6, 500, "Wi-Fi Clients Over Time", "Jumlah Perangkat Wi-Fi dari Waktu ke Waktu"),
-    (7, 500, "Wi-Fi Quality Trends (Signal / Satisfaction / Retry)", "Tren Kualitas Wi-Fi (Sinyal / Kepuasan / Pengulangan)"),
-]
-
-
 def get_conn():
     conn = psycopg2.connect(DATABASE_URL)
     conn.cursor_factory = psycopg2.extras.RealDictCursor
@@ -222,20 +191,6 @@ def collect_flow_providers(customer_id, from_ms, to_ms, limit=15):
             "icon_font": icon_font,
         })
     return rows
-
-
-def render_panel(uid, panel_id, from_ms, to_ms, width=1000, height=500, extra=""):
-    auth = base64.b64encode(f"admin:{GRAFANA_ADMIN_PASSWORD}".encode()).decode()
-    url = (
-        f"{GRAFANA_INTERNAL_URL}/render/d-solo/{uid}/r"
-        f"?panelId={panel_id}&width={width}&height={height}"
-        f"&from={from_ms}&to={to_ms}&theme=light&tz=Asia%2FJakarta{extra}"
-    )
-    req = urllib.request.Request(url, headers={"Authorization": f"Basic {auth}"})
-    # First render after a renderer cold start is slow (headless browser
-    # spin-up) -- give it a generous timeout rather than failing the report.
-    with urllib.request.urlopen(req, timeout=90) as resp:
-        return resp.read()
 
 
 def collect_kpis(customer_id, start, end):
@@ -459,6 +414,168 @@ def collect_sla(customer_id, start, end):
     return sla_months, sla_overall, ytd
 
 
+# --- Native timeseries collectors --------------------------------------------
+# Each runs the SAME SQL the Grafana panel runs (from customer_overview.json),
+# with the Grafana macros swapped for bind params: $__timeFilter(c) -> c BETWEEN
+# %(start)s AND %(end)s, $__timeFrom()/$__timeTo() -> %(start)s/%(end)s,
+# $customer_id/$router -> real ids. time_bucket_gapfill is a TimescaleDB function
+# and runs unchanged. Rows come back oldest-first (ORDER BY time).
+
+def _ts_query(sql, params):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def _pivot(rows, value_key="value", metric_key="metric", time_key="t"):
+    """Long-format (time, metric, value) rows -> (times, {metric: [values]})
+    aligned on the shared gap-filled time grid."""
+    times, seen = [], set()
+    for r in rows:
+        t = r[time_key]
+        if t not in seen:
+            seen.add(t); times.append(t)
+    idx = {t: i for i, t in enumerate(times)}
+    series = {}
+    for r in rows:
+        m = r[metric_key]
+        series.setdefault(m, [None] * len(times))[idx[r[time_key]]] = r[value_key]
+    return times, series
+
+
+def collect_traffic(customer_id, start, end):
+    """Panel 10 -- aggregate uplink download/upload (bits/sec)."""
+    sql = """
+        WITH deltas AS (
+          SELECT um.router_id, um.uplink_label, um.time,
+            um.rx_bytes - LAG(um.rx_bytes) OVER (PARTITION BY um.router_id, um.uplink_label ORDER BY um.time) AS rx_delta,
+            um.tx_bytes - LAG(um.tx_bytes) OVER (PARTITION BY um.router_id, um.uplink_label ORDER BY um.time) AS tx_delta,
+            EXTRACT(EPOCH FROM (um.time - LAG(um.time) OVER (PARTITION BY um.router_id, um.uplink_label ORDER BY um.time))) AS seconds_elapsed
+          FROM uplink_metrics um JOIN routers r ON r.id = um.router_id
+          WHERE r.customer_id = %(customer_id)s AND um.time BETWEEN %(start)s AND %(end)s)
+        SELECT time_bucket_gapfill('5 minutes', time, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
+          sum(CASE WHEN rx_delta IS NULL THEN NULL ELSE GREATEST(rx_delta, 0) * 8 / NULLIF(seconds_elapsed, 0) END) AS download_bps,
+          sum(CASE WHEN tx_delta IS NULL THEN NULL ELSE GREATEST(tx_delta, 0) * 8 / NULLIF(seconds_elapsed, 0) END) AS upload_bps
+        FROM deltas GROUP BY 1 ORDER BY 1
+    """
+    rows = _ts_query(sql, {"customer_id": customer_id, "start": start, "end": end})
+    return ([r["t"] for r in rows],
+            [r["download_bps"] for r in rows],
+            [r["upload_bps"] for r in rows])
+
+
+def collect_path(router_id, start, end):
+    """Panel 105 -- per-router latency / jitter / loss, per target. Single scan
+    (the dashboard UNIONs three scans of path_metrics; one pass is ~3x faster),
+    reshaped into '<target> latency/jitter/loss' series."""
+    sql = """
+        SELECT time_bucket_gapfill('5 minutes', time, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
+               target_name, avg(rtt_avg_ms) AS latency, avg(jitter_ms) AS jitter, avg(packet_loss_pct) AS loss
+        FROM path_metrics WHERE router_id = %(router_id)s AND time BETWEEN %(start)s AND %(end)s
+        GROUP BY 1, target_name ORDER BY 1
+    """
+    rows = _ts_query(sql, {"router_id": router_id, "start": start, "end": end})
+    times, seen = [], set()
+    for r in rows:
+        if r["t"] not in seen:
+            seen.add(r["t"]); times.append(r["t"])
+    idx = {t: i for i, t in enumerate(times)}
+    series = {}
+    for r in rows:
+        for metric in ("latency", "jitter", "loss"):
+            series.setdefault(f"{r['target_name']} {metric}", [None] * len(times))[idx[r["t"]]] = r[metric]
+    return times, series
+
+
+def collect_resource(customer_id, start, end):
+    """Panel 9 -- per-router CPU / RAM / Disk %."""
+    sql = """
+        SELECT time_bucket_gapfill('5 minutes', rm.time, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
+               r.identity_name || ' CPU %%' AS metric, avg(rm.cpu_load_pct) AS value
+        FROM router_metrics rm JOIN routers r ON r.id = rm.router_id
+        WHERE r.customer_id = %(customer_id)s AND rm.time BETWEEN %(start)s AND %(end)s GROUP BY 1, r.identity_name
+        UNION ALL
+        SELECT time_bucket_gapfill('5 minutes', rm.time, %(start)s::timestamptz, %(end)s::timestamptz),
+               r.identity_name || ' RAM %%', avg(CASE WHEN rm.ram_total_bytes > 0 THEN 100.0 * rm.ram_used_bytes / rm.ram_total_bytes END)
+        FROM router_metrics rm JOIN routers r ON r.id = rm.router_id
+        WHERE r.customer_id = %(customer_id)s AND rm.time BETWEEN %(start)s AND %(end)s GROUP BY 1, r.identity_name
+        UNION ALL
+        SELECT time_bucket_gapfill('5 minutes', rm.time, %(start)s::timestamptz, %(end)s::timestamptz),
+               r.identity_name || ' Disk %%', avg(CASE WHEN rm.disk_total_bytes > 0 THEN 100.0 * rm.disk_used_bytes / rm.disk_total_bytes END)
+        FROM router_metrics rm JOIN routers r ON r.id = rm.router_id
+        WHERE r.customer_id = %(customer_id)s AND rm.time BETWEEN %(start)s AND %(end)s GROUP BY 1, r.identity_name
+        ORDER BY 1
+    """
+    return _pivot(_ts_query(sql, {"customer_id": customer_id, "start": start, "end": end}))
+
+
+def collect_clients(customer_id, start, end):
+    """Panel 6 -- distinct Wi-Fi clients per 5-min bucket over time. The
+    dashboard uses a correlated subquery with a 15-min rolling window
+    (count(DISTINCT) per point) that is ~9 s at report scale; a single-scan
+    per-bucket distinct is ~30x faster and shows the same daily rhythm."""
+    sql = """
+        SELECT time_bucket_gapfill('5 minutes', cm.time, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
+               count(DISTINCT cm.client_mac) AS clients
+        FROM client_metrics cm JOIN sites s ON s.id = cm.site_id
+        WHERE s.customer_id = %(customer_id)s AND cm.time BETWEEN %(start)s AND %(end)s GROUP BY 1 ORDER BY 1
+    """
+    rows = _ts_query(sql, {"customer_id": customer_id, "start": start, "end": end})
+    return [r["t"] for r in rows], {"Clients": [r["clients"] for r in rows]}
+
+
+def collect_wifi_quality(customer_id, start, end):
+    """Panel 7 -- avg signal (dBm), satisfaction (%), retry (%)."""
+    sql = """
+        SELECT time_bucket_gapfill('5 minutes', cm.time, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
+               avg(cm.signal) AS avg_signal, avg(cm.satisfaction) AS avg_satisfaction,
+               100.0 * sum(cm.tx_retries) / NULLIF(sum(cm.wifi_tx_attempts), 0) AS retry_pct
+        FROM client_metrics cm JOIN sites s ON s.id = cm.site_id
+        WHERE s.customer_id = %(customer_id)s AND cm.time BETWEEN %(start)s AND %(end)s GROUP BY 1 ORDER BY 1
+    """
+    rows = _ts_query(sql, {"customer_id": customer_id, "start": start, "end": end})
+    return ([r["t"] for r in rows],
+            [r["avg_signal"] for r in rows],
+            [r["avg_satisfaction"] for r in rows],
+            [r["retry_pct"] for r in rows])
+
+
+def collect_flow_users(customer_id, from_ms, to_ms, limit=15):
+    """Panel 2 -- top internal users by traffic, from ClickHouse user_hourly.
+    Same best-effort urllib pattern as collect_flow_providers; returns
+    (labels, values, human_labels) for a horizontal bar chart, or ([],[],[])."""
+    from_s = int(from_ms // 1000)
+    to_s = int(to_ms // 1000)
+    q = (
+        "SELECT internal_ip, sum(bytes) AS total FROM flow.user_hourly "
+        "WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map "
+        f"WHERE customer_id = {int(customer_id)}) "
+        f"AND hour >= toDateTime({from_s}) AND hour < toDateTime({to_s}) "
+        f"GROUP BY internal_ip ORDER BY total DESC LIMIT {int(limit)} FORMAT TabSeparated"
+    )
+    try:
+        creds = urllib.parse.urlencode({"user": CLICKHOUSE_USER, "password": CLICKHOUSE_PASSWORD})
+        req = urllib.request.Request(f"{CLICKHOUSE_URL}/?{creds}", data=q.encode(), method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            text = resp.read().decode()
+    except Exception:
+        return [], [], []
+    labels, values, human = [], [], []
+    for line in text.splitlines():
+        ip, tab, total = line.partition("\t")
+        if not tab:
+            continue
+        try:
+            total = int(total)
+        except ValueError:
+            continue
+        labels.append(ip); values.append(total); human.append(_fmt_bytes(total))
+    return labels, values, human
+
+
 def build_pdf(context):
     """Render report_template.html with the assembled context and print it
     to PDF via WeasyPrint. base_url makes relative asset paths resolve."""
@@ -517,26 +634,25 @@ def generate_report(customer_id, days=30, start=None, end=None):
     ping_routers = cur.fetchall()
     conn.close()
 
-    # Regenerate the locked clone so the report reflects the latest panel
-    # definitions (idempotent -- same uid, overwrite=True).
-    share_dashboard_for_customer(customer_id, customer_name)
-    uid = f"customer-{slugify(customer_name)}"
-
-    # Panels render at 1400px wide (~200 DPI on an A4 content box).
-    def section(png, en, idn):
-        return {"png_uri": _png_uri(png), "title_en": en, "title_id": idn}
+    # Every report panel is now drawn natively (matplotlib, charts.py) from
+    # direct SQL / ClickHouse -- no Grafana image-renderer and no dashboard-clone
+    # regeneration on the report path. section() wraps a chart data: URI for the
+    # template's image slot; order matches the previous Grafana layout.
+    def section(uri, en, idn):
+        return {"png_uri": uri, "title_en": en, "title_id": idn}
 
     sections = []
-    for panel_id, height, en, idn in REPORT_PANELS_HEAD:
-        png = render_panel(uid, panel_id, from_ms, to_ms, width=1400, height=int(height * 1.4))
-        sections.append(section(png, en, idn))
-    # Traffic composition (only if this customer has flow collection). Rendered
-    # from the shared flow-overview dashboard with customer_id passed explicitly
-    # -- same pattern as the per-router ping panel. Best-effort per panel.
+
+    # Internet Traffic -- aggregate uplink download/upload.
+    t_times, t_down, t_up = collect_traffic(customer_id, start, end)
+    sections.append(section(
+        charts.area_updown_chart(t_times, t_down, t_up),
+        "Internet Traffic (All Routers Combined)",
+        "Trafik Internet (Gabungan Semua Router)"))
+
+    # Traffic composition (flow customers only): Top Content Providers as a
+    # native branded table (brand glyphs), Top Internal Users as a bar chart.
     if flow_enabled(customer_id):
-        # Top Content Providers: a native branded table (ClickHouse direct),
-        # not a Grafana PNG, so each provider row carries its brand glyph. Keep
-        # it in panel-1's old position (right after Internet Traffic).
         prov_rows = collect_flow_providers(customer_id, from_ms, to_ms)
         if prov_rows:
             sections.append({
@@ -544,24 +660,40 @@ def generate_report(customer_id, days=30, start=None, end=None):
                 "title_en": "Top Content Providers",
                 "title_id": "Konten / Layanan Teratas",
             })
-        for panel_id, height, en, idn in REPORT_FLOW_PANELS:
-            try:
-                png = render_panel(FLOW_DASHBOARD_UID, panel_id, from_ms, to_ms, width=1400,
-                                   height=int(height * 1.4), extra=f"&var-customer_id={customer_id}")
-                sections.append(section(png, en, idn))
-            except Exception:
-                pass
+        u_labels, u_values, u_human = collect_flow_users(customer_id, from_ms, to_ms)
+        if u_labels:
+            sections.append(section(
+                charts.hbar_chart(u_labels, u_values, u_human),
+                "Top Internal Users", "Pengguna Internal Teratas"))
+
+    # Path latency / jitter / loss -- one chart per router with path data.
     for r in ping_routers:
-        png = render_panel(uid, PING_PANEL_ID, from_ms, to_ms, width=1400,
-                           height=int(PING_PANEL_HEIGHT * 1.4), extra=f"&var-router={r['id']}")
+        p_times, p_series = collect_path(r["id"], start, end)
         sections.append(section(
-            png,
+            charts.line_chart(p_times, p_series, y_label="ms / %"),
             f"Path Latency, Jitter & Packet Loss — {r['identity_name']}",
-            f"Latensi, Jitter & Kehilangan Paket — {r['identity_name']}",
-        ))
-    for panel_id, height, en, idn in REPORT_PANELS_TAIL:
-        png = render_panel(uid, panel_id, from_ms, to_ms, width=1400, height=int(height * 1.4))
-        sections.append(section(png, en, idn))
+            f"Latensi, Jitter & Kehilangan Paket — {r['identity_name']}"))
+
+    # Router resource usage (CPU / RAM / Disk).
+    rs_times, rs_series = collect_resource(customer_id, start, end)
+    sections.append(section(
+        charts.line_chart(rs_times, rs_series, y_label="%", y_suffix="%", y_max=100),
+        "Router Resource Usage (CPU / RAM / Disk)",
+        "Penggunaan Sumber Daya Router (CPU / RAM / Disk)"))
+
+    # Wi-Fi clients over time.
+    c_times, c_series = collect_clients(customer_id, start, end)
+    sections.append(section(
+        charts.line_chart(c_times, c_series, y_label="Clients"),
+        "Wi-Fi Clients Over Time",
+        "Jumlah Perangkat Wi-Fi dari Waktu ke Waktu"))
+
+    # Wi-Fi quality trends (signal / satisfaction / retry).
+    q_times, q_sig, q_sat, q_ret = collect_wifi_quality(customer_id, start, end)
+    sections.append(section(
+        charts.dual_axis_chart(q_times, q_sig, q_sat, q_ret),
+        "Wi-Fi Quality Trends (Signal / Satisfaction / Retry)",
+        "Tren Kualitas Wi-Fi (Sinyal / Kepuasan / Pengulangan)"))
 
     kpis = collect_kpis(customer_id, start, end)
     ap_rows, ap_summary_en, ap_summary_id = collect_ap_rows(customer_id)
