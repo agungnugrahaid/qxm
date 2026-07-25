@@ -90,13 +90,14 @@ def _fmt_bytes(n):
         n /= 1024
 
 
-# Font Awesome 6 Free glyphs (PUA codepoints) for the Top Content Providers
-# table. Brand logos live in the Brands face ("Font Awesome 6 Brands"); the
-# globe fallback is in the Solid face ("Font Awesome 6 Free", weight 900). The
-# TTFs are vendored in assets/fonts/ and installed as system fonts by the
+# Font Awesome 7 Free glyphs (PUA codepoints) for the Top Content Providers
+# table. Brand logos live in the Brands face ("Font Awesome 7 Brands"); the
+# globe fallback is in the Solid face ("Font Awesome 7 Free", weight 900). The
+# OTFs are vendored in assets/fonts/ and installed as system fonts by the
 # Dockerfiles (same path as Montserrat), so WeasyPrint finds them via pango.
-_ICON_BRANDS = "fa-b"  # CSS class -> font-family "Font Awesome 6 Brands"
-_ICON_SOLID = "fa-s"   # CSS class -> font-family "Font Awesome 6 Free" (900)
+# On FA7 (not FA6) so the Roblox Creator Studio glyph (added in v7) is available.
+_ICON_BRANDS = "fa-b"  # CSS class -> font-family "Font Awesome 7 Brands"
+_ICON_SOLID = "fa-s"   # CSS class -> font-family "Font Awesome 7 Free" (900)
 
 
 def _provider_icon(label):
@@ -105,9 +106,9 @@ def _provider_icon(label):
     cache-qualified checks come first so GOOGLE-CACHE -> YouTube beats the plain
     GOOGLE rule. Keys are substrings of the iptoasn ASN name (so AKAMAI-LINODE
     matches LINODE). Monochrome by design (pure Font Awesome). Networks with no
-    Font Awesome glyph -- Fastly, Akamai, Netflix, Alibaba/Taobao, Shopee,
-    Roblox, and every ISP/CDN -- fall through to the globe. Codepoints are FA6
-    Free PUA, verified against the vendored fa-brands-400.ttf cmap."""
+    Font Awesome glyph -- Fastly, Akamai, Netflix, Alibaba/Taobao, Shopee, and
+    every ISP/CDN -- fall through to the globe. Codepoints are FA7 Free PUA,
+    verified against the vendored fa-brands-400.otf cmap."""
     u = (label or "").upper()
     # Google family -- cache first (on-net YouTube/Google cache -> YouTube).
     if "GOOGLE" in u and "CACHE" in u:
@@ -136,6 +137,8 @@ def _provider_icon(label):
         return "", _ICON_BRANDS   # linode (Akamai Connected Cloud)
     if "DIGITALOCEAN" in u:
         return "", _ICON_BRANDS   # digitalocean
+    if "ROBLOX" in u:
+        return "", _ICON_BRANDS   # roblox-creator-studio
     return "", _ICON_SOLID        # globe (fastly / akamai / gmedia / ISPs)
 
 # Curated, non-repeated panels. (panel_id, height_px, english_caption,
