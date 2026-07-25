@@ -31,23 +31,29 @@ RANGE(MIN ip_start MAX ip_end)
 LIFETIME(300);
 
 -- ============================================================================
--- POPULATE / CHANGE (cdn_override is TinyLog: INSERT appends; to change or
--- remove an entry, TRUNCATE and re-insert the whole set).
+-- CURRENT POPULATED SET (source of truth). cdn_override is TinyLog, so to change
+-- a label or range we TRUNCATE and re-insert the whole set. Re-applying this file
+-- resets the table to exactly these ranges, then reloads the dict. Labels carry a
+-- site suffix: GMEDIA-JOG = Jogja caches, GMEDIA-SMG = Semarang caches.
+-- IMPORTANT: cdn_override changes are NOT retroactive on provider_hourly -- after
+-- editing, re-backfill provider_hourly (procedure at the bottom of
+-- flow/materialized_views.sql) to relabel already-aggregated history.
 -- ============================================================================
+TRUNCATE TABLE cdn_override;
 
--- Add a range from CIDR (recommended -- computes start/end for you):
---   INSERT INTO cdn_override
---   SELECT toUInt32(tupleElement(r,1)), toUInt32(tupleElement(r,2)), 'Google Cache (on-net)'
---   FROM (SELECT IPv4CIDRToRange(toIPv4('112.78.36.0'), 24) AS r);
+INSERT INTO cdn_override
+SELECT toUInt32(tupleElement(r,1)), toUInt32(tupleElement(r,2)), 'META-CACHE (GMEDIA-JOG)'
+FROM (SELECT IPv4CIDRToRange(toIPv4('112.78.36.128'), 26) AS r);
 
--- Add a range from explicit first/last IP:
---   INSERT INTO cdn_override VALUES
---     (toUInt32(toIPv4('43.245.187.0')), toUInt32(toIPv4('43.245.187.255')), 'Meta Cache (on-net)');
+INSERT INTO cdn_override
+SELECT toUInt32(tupleElement(r,1)), toUInt32(tupleElement(r,2)), 'GOOGLE-CACHE (GMEDIA-JOG)'
+FROM (SELECT IPv4CIDRToRange(toIPv4('43.245.187.0'), 26) AS r);
 
--- Replace the whole set (the way to edit/remove entries):
---   TRUNCATE TABLE cdn_override;
---   ... re-run the INSERTs you want ...
---   SYSTEM RELOAD DICTIONARY flow.cdn_dict;
+INSERT INTO cdn_override
+SELECT toUInt32(tupleElement(r,1)), toUInt32(tupleElement(r,2)), 'GOOGLE-CACHE (GMEDIA-SMG)'
+FROM (SELECT IPv4CIDRToRange(toIPv4('119.2.50.0'), 26) AS r);
+
+SYSTEM RELOAD DICTIONARY flow.cdn_dict;
 
 -- View current entries (human-readable):
 --   SELECT IPv4NumToString(ip_start) AS start, IPv4NumToString(ip_end) AS end, label FROM cdn_override;
