@@ -2,7 +2,7 @@
  "title": "Customer Overview",
  "uid": "customer-overview",
  "schemaVersion": 39,
- "version": 73,
+ "version": 74,
  "editable": true,
  "timezone": "browser",
  "refresh": "5m",
@@ -2520,6 +2520,43 @@
      "refId": "A",
      "format": "table",
      "rawSql": "SELECT hostname AS \"Device\", client_mac AS \"MAC\", ip AS \"IP\", ap_name AS \"AP\", controller_name AS \"Controller\", essid AS \"SSID\", CASE WHEN radio = 'ng' THEN '2.4GHz' WHEN radio = 'na' THEN '5GHz' ELSE radio END AS \"Band\", signal AS \"Signal (dBm)\", (signal - noise) AS \"SNR (dB)\", satisfaction AS \"Satisfaction\", tx_rate / 1000 AS \"TX Mbps\", rx_rate / 1000 AS \"RX Mbps\", controller_url AS \"Controller URL\", time AS \"As of\" FROM (SELECT DISTINCT ON (cm.site_id, cm.client_mac) cm.hostname, cm.client_mac, cm.ip, cm.essid, cm.radio, cm.signal, cm.noise, cm.satisfaction, cm.tx_rate, cm.rx_rate, cm.time, ctrl.name AS controller_name, CASE WHEN ctrl.vendor = 'ruijie' THEN ctrl.base_url || '/macc5/isp/#/monitor_project_list_menu' ELSE ctrl.base_url || '/manage/site/' || s.unifi_site_name || '/clients' END AS controller_url, ai.ap_name FROM client_metrics cm JOIN sites s ON s.id = cm.site_id JOIN controllers ctrl ON ctrl.id = s.controller_id LEFT JOIN LATERAL (SELECT ap_name FROM ap_inventory WHERE ap_mac = cm.ap_mac ORDER BY time DESC LIMIT 1) ai ON true WHERE s.customer_id = $customer_id AND cm.time > now() - interval '15 minutes' AND cm.is_wired = false ORDER BY cm.site_id, cm.client_mac, cm.time DESC) latest ORDER BY \"Controller\", \"AP\", \"Device\" NULLS LAST"
+    }
+   ]
+  },
+  {
+   "id": 210,
+   "type": "row",
+   "title": "Traffic Flow",
+   "collapsed": true,
+   "gridPos": { "h": 1, "w": 24, "x": 0, "y": 155 },
+   "panels": [
+    {
+     "id": 211,
+     "title": "Top Content Providers (by network)",
+     "type": "table",
+     "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" },
+     "gridPos": { "h": 10, "w": 12, "x": 0, "y": 156 },
+     "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Bytes" }, "properties": [ { "id": "unit", "value": "bytes" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] } ] },
+     "targets": [ { "refId": "A", "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" }, "format": 1, "queryType": "table", "rawSql": "SELECT provider AS Provider, sum(bytes) AS Bytes FROM flow.provider_hourly WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map WHERE customer_id = $customer_id) AND $__timeFilter(hour) GROUP BY Provider ORDER BY Bytes DESC LIMIT 15" } ]
+    },
+    {
+     "id": 212,
+     "title": "Top Internal Users",
+     "type": "table",
+     "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" },
+     "gridPos": { "h": 10, "w": 12, "x": 12, "y": 156 },
+     "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Bytes" }, "properties": [ { "id": "unit", "value": "bytes" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] } ] },
+     "targets": [ { "refId": "A", "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" }, "format": 1, "queryType": "table", "rawSql": "SELECT internal_ip AS `Internal IP`, sum(bytes) AS Bytes FROM flow.user_hourly WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map WHERE customer_id = $customer_id) AND $__timeFilter(hour) GROUP BY `Internal IP` ORDER BY Bytes DESC LIMIT 15" } ]
+    },
+    {
+     "id": 213,
+     "title": "Top clients by connection-rate / PPS (conntrack-pressure)",
+     "description": "Peak per-minute connection and packet rate per internal client -- the pattern that exhausts the router's conntrack table (e.g. a SYN flood). Rates are OBSERVED (raw): a sampled router under-reports.",
+     "type": "table",
+     "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" },
+     "gridPos": { "h": 10, "w": 24, "x": 0, "y": 166 },
+     "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Peak conn/s (obs)" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] }, { "matcher": { "id": "byName", "options": "SYN-like %" }, "properties": [ { "id": "unit", "value": "percent" } ] } ] },
+     "targets": [ { "refId": "A", "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" }, "format": 1, "queryType": "table", "rawSql": "SELECT client_ip AS `Client IP`, round(max(flows)/60.0, 1) AS `Peak conn/s (obs)`, round(max(packets)/60.0, 1) AS `Peak pkt/s (obs)`, round(100*sum(syn_like)/greatest(sum(flows),1)) AS `SYN-like %` FROM flow.client_minute WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map WHERE customer_id = $customer_id) AND $__timeFilter(minute) GROUP BY `Client IP` ORDER BY `Peak conn/s (obs)` DESC LIMIT 15" } ]
     }
    ]
   }

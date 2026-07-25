@@ -273,6 +273,19 @@ def unattributed_exporters():
         return []
 
 
+def customer_has_flow(customer_id):
+    """True if the customer has any flow exporter mapped in ClickHouse. Best-effort
+    like report_lib.flow_enabled: CH down/absent -> False, so a transient blip just
+    omits the (bonus) flow section from a shared dashboard rather than erroring."""
+    try:
+        rows = _ch_query(
+            f"SELECT count() FROM flow.exporter_map WHERE customer_id = {int(customer_id)} "
+            "FORMAT TabSeparated")
+        return bool(rows) and int(rows[0][0]) > 0
+    except Exception:
+        return False
+
+
 def _flow_redirect(router_id, redirect_to, error=None):
     """Back to the router edit page's Flow Attribution section, preserving the
     original ?redirect_to so Save/Cancel still return where the user came from."""
@@ -1235,10 +1248,18 @@ def share_dashboard(request: Request, customer_id: int):
     cur = conn.cursor()
     cur.execute("SELECT * FROM customers WHERE id = %s", (customer_id,))
     customer = cur.fetchone()
+    # Per-customer section flags: strip sections the customer has no data for so
+    # the shared clone never shows empty router/wireless/flow panels.
+    cur.execute("SELECT count(*) AS n FROM routers WHERE customer_id = %s", (customer_id,))
+    has_routers = cur.fetchone()["n"] > 0
+    cur.execute("SELECT count(*) AS n FROM sites WHERE customer_id = %s", (customer_id,))
+    has_wireless = cur.fetchone()["n"] > 0
     conn.close()
+    flags = {"has_routers": has_routers, "has_wireless": has_wireless,
+             "include_flow": customer_has_flow(customer_id)}
 
     try:
-        url = share_dashboard_for_customer(customer_id, customer["name"])
+        url = share_dashboard_for_customer(customer_id, customer["name"], flags)
         result = {"ok": True, "detail": url}
     except Exception as e:
         result = {"ok": False, "detail": str(e)}

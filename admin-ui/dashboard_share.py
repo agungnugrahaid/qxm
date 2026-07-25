@@ -35,6 +35,18 @@ GRAFANA_PUBLIC_URL = os.environ.get("GRAFANA_PUBLIC_URL", "https://grafana.youri
 # Rows that are internal-NOC-only -- never shown to an external customer.
 EXCLUDED_ROWS = {"Logs & Diagnostics", "Inventory / Config"}
 
+# Rows that only make sense when the customer actually has that data configured,
+# mapped to the flag (in `flags`) that gates them. A router-only customer gets no
+# empty "Wireless / UniFi" section; a wireless-only customer gets no empty router
+# sections; a customer without flow collection gets no "Traffic Flow" section.
+# Titles absent from the dashboard JSON are simply no-ops.
+ROW_REQUIREMENTS = {
+    "Network Quality": "has_routers",
+    "Router Resource Health": "has_routers",
+    "Wireless / UniFi": "has_wireless",
+    "Traffic Flow": "include_flow",
+}
+
 
 def slugify(name):
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
@@ -50,7 +62,12 @@ def _row_ranges(panels):
     return ranges
 
 
-def generate_dashboard_json(customer_id, customer_name):
+def generate_dashboard_json(customer_id, customer_name, flags=None):
+    """flags: {"has_routers":bool, "has_wireless":bool, "include_flow":bool} --
+    sections whose requirement (ROW_REQUIREMENTS) is unmet are stripped from the
+    clone so the customer never sees an empty panel for data they don't have.
+    Missing/None flags default to True (show the section)."""
+    flags = flags or {}
     with open(SOURCE_DASHBOARD_PATH) as f:
         d = json.load(f)
 
@@ -59,8 +76,17 @@ def generate_dashboard_json(customer_id, customer_name):
     raw = json.dumps(d).replace("$customer_id", str(customer_id))
     d = json.loads(raw)
 
+    # NOC-only rows are always excluded; requirement-gated rows are excluded only
+    # when their flag is explicitly False. Both feed the same y-range + shift
+    # machinery below, which handles expanded rows and the collapsed Traffic Flow
+    # row alike (excluding a collapsed row's title drops it and its nested panels).
+    excluded_titles = set(EXCLUDED_ROWS)
+    for title, req in ROW_REQUIREMENTS.items():
+        if flags.get(req, True) is False:
+            excluded_titles.add(title)
+
     ranges = _row_ranges(d["panels"])
-    excluded_ranges = [(s, e) for title, s, e in ranges if title in EXCLUDED_ROWS]
+    excluded_ranges = [(s, e) for title, s, e in ranges if title in excluded_titles]
 
     def is_excluded(p):
         y = p["gridPos"]["y"]
@@ -97,8 +123,8 @@ def _grafana_api(method, path, body=None):
         return json.loads(resp.read())
 
 
-def share_dashboard_for_customer(customer_id, customer_name):
-    d, slug = generate_dashboard_json(customer_id, customer_name)
+def share_dashboard_for_customer(customer_id, customer_name, flags=None):
+    d, slug = generate_dashboard_json(customer_id, customer_name, flags)
     uid = d["uid"]
 
     result = _grafana_api(
