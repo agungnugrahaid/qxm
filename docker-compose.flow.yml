@@ -32,7 +32,10 @@ services:
 
   # Keeps flow.exporter_map (attribution) in step with Postgres: reads
   # router_flow_exporters -> routers -> customers, expands CIDRs, rewrites the
-  # map, and logs any exporter IP seen in flows but not yet attributed.
+  # map, and logs any exporter IP seen in flows but not yet attributed. Also runs
+  # scan_abuse() each cycle: flags internal clients with an abnormal connection /
+  # packet rate (the conntrack-exhaustion pattern) into flow_abuse_events and,
+  # if WEBHOOK_URL is set, alerts. See FLOW_COLLECTION_PLAN.md.
   flow-sync:
     build:
       context: ./flow
@@ -46,6 +49,11 @@ services:
       CH_PASS: ${CH_PASS:-flowpass}
       CH_DB: flow
       SYNC_INTERVAL: ${FLOW_SYNC_INTERVAL:-300}
+      # Abuse detection: empty WEBHOOK_URL = detect + persist only (no alert).
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+      ABUSE_WINDOW_MIN: ${ABUSE_WINDOW_MIN:-10}
+      ABUSE_FLOOR_CONN_RATE: ${ABUSE_FLOOR_CONN_RATE:-200}
+      ABUSE_MULTIPLE_K: ${ABUSE_MULTIPLE_K:-10}
     depends_on:
       - clickhouse
     restart: unless-stopped

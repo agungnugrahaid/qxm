@@ -102,6 +102,48 @@ FROM (
 ) WHERE sp2 != dp2
 GROUP BY exporter_ip, hour;
 
+-- ---- per-minute per-client rollup (abuse / conntrack-pressure detection) ----
+-- Unlike the 13-month reporting rollups above, this is a short-lived (3-day)
+-- fine-grained view used to spot a client generating an abnormal connection /
+-- packet rate -- the pattern that filled Grand Ambarrukmo's conntrack to 100%
+-- (host 10.100.99.147, ~5,300 SYN/s). Each flows_raw row is ~one conntrack
+-- entry, so `flows` per minute per client is the connection-rate proxy; `packets`
+-- is PPS; `syn_like` (single-packet TCP flows) is the SYN-flood signature (we get
+-- no TCP flags from goflow2). Keyed on the internal SOURCE only (client-
+-- originated connections), strict-private test -- the offender is a real host,
+-- never the NAT/exporter IP. flow-sync's scan_abuse() reads this; the flow
+-- dashboard's "Top clients by connection-rate" panel reads this. NOTE: on a
+-- SAMPLED router these counts under-report (single-packet flows are dropped
+-- ~99% at 1:99) -- the detector scales by the router's configured ratio; the
+-- dashboard shows raw/observed. Additive: new table + MV, no rebuild of the
+-- reporting rollups. Backfill once from flows_raw (block at the bottom).
+CREATE TABLE IF NOT EXISTS client_minute (
+  exporter_ip String,
+  minute      DateTime,
+  client_ip   String,
+  flows       UInt64,
+  packets     UInt64,
+  bytes       UInt64,
+  syn_like    UInt64
+) ENGINE = SummingMergeTree
+ORDER BY (exporter_ip, minute, client_ip)
+TTL minute + INTERVAL 3 DAY;
+
+-- syn condition computed in the inner subquery: aliasing sum(packets) AS packets
+-- in the outer SELECT shadows the source column, so a countIf(packets=1) up there
+-- would nest aggregates (ILLEGAL_AGGREGATION). Same subquery shape as the rollups.
+CREATE MATERIALIZED VIEW IF NOT EXISTS client_minute_mv TO client_minute AS
+SELECT exporter_ip, minute, client_ip,
+  count() AS flows, sum(packets) AS packets, sum(bytes) AS bytes,
+  countIf(is_syn) AS syn_like
+FROM (
+  SELECT exporter_ip, toStartOfMinute(ts) AS minute, src_addr AS client_ip,
+    packets, bytes, (packets = 1 AND proto = 'TCP') AS is_syn
+  FROM flows_raw
+  WHERE (isIPAddressInRange(src_addr,'10.0.0.0/8') OR isIPAddressInRange(src_addr,'172.16.0.0/12') OR isIPAddressInRange(src_addr,'192.168.0.0/16') OR isIPAddressInRange(src_addr,'100.64.0.0/10'))
+)
+GROUP BY exporter_ip, minute, client_ip;
+
 -- ---- re-apply + backfill (run when the MV logic above changes) ----
 -- CREATE ... IF NOT EXISTS won't replace an EXISTING view, so to roll out a
 -- logic change you must DROP the affected MVs, recreate them (re-run the file),
@@ -143,3 +185,16 @@ GROUP BY exporter_ip, hour;
 --       (isIPAddressInRange(dst_addr,'10.0.0.0/8') OR isIPAddressInRange(dst_addr,'172.16.0.0/12') OR isIPAddressInRange(dst_addr,'192.168.0.0/16') OR isIPAddressInRange(dst_addr,'100.64.0.0/10') OR dst_addr = exporter_ip) AS dp2
 --     FROM flows_raw ) WHERE sp2 != dp2
 --   GROUP BY exporter_ip, hour;
+--
+-- Backfill client_minute (same body as client_minute_mv; safe to run any time --
+-- SummingMergeTree dedups by key on merge, but avoid double-running the exact
+-- same window right after the MV is live or you'll double-count that overlap):
+--   INSERT INTO client_minute
+--   SELECT exporter_ip, minute, client_ip,
+--     count() AS flows, sum(packets) AS packets, sum(bytes) AS bytes,
+--     countIf(is_syn) AS syn_like
+--   FROM ( SELECT exporter_ip, toStartOfMinute(ts) AS minute, src_addr AS client_ip,
+--       packets, bytes, (packets = 1 AND proto = 'TCP') AS is_syn
+--     FROM flows_raw
+--     WHERE (isIPAddressInRange(src_addr,'10.0.0.0/8') OR isIPAddressInRange(src_addr,'172.16.0.0/12') OR isIPAddressInRange(src_addr,'192.168.0.0/16') OR isIPAddressInRange(src_addr,'100.64.0.0/10')) )
+--   GROUP BY exporter_ip, minute, client_ip;

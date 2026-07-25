@@ -43,3 +43,20 @@ CREATE TABLE IF NOT EXISTS cdn_override (
   ip_end   UInt32,
   label    String
 ) ENGINE = TinyLog;
+
+-- Per-minute per-client rollup for abuse / conntrack-pressure detection (3-day
+-- buffer). The matching materialized view lives in flow/materialized_views.sql;
+-- this stub is here so a fresh install has the target table. flow-sync's
+-- scan_abuse() and the flow dashboard's "Top clients by connection-rate" panel
+-- read it. See FLOW_COLLECTION_PLAN.md.
+CREATE TABLE IF NOT EXISTS client_minute (
+  exporter_ip String,
+  minute      DateTime,
+  client_ip   String,
+  flows       UInt64,
+  packets     UInt64,
+  bytes       UInt64,
+  syn_like    UInt64
+) ENGINE = SummingMergeTree
+ORDER BY (exporter_ip, minute, client_ip)
+TTL minute + INTERVAL 3 DAY;
