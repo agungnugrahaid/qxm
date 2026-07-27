@@ -289,9 +289,9 @@ def collect_ap_rows(customer_id):
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT ap_name, CASE WHEN state = 1 THEN 'online' ELSE 'offline' END AS status,
+        SELECT ap_name, ap_mac, CASE WHEN state = 1 THEN 'online' ELSE 'offline' END AS status,
                num_sta, satisfaction, cpu_pct, model
-        FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name, ai.state, ai.num_sta,
+        FROM (SELECT DISTINCT ON (ai.ap_mac) ai.ap_name, ai.ap_mac, ai.state, ai.num_sta,
                      ai.satisfaction, ai.cpu_pct, ai.model
               FROM ap_inventory ai JOIN sites s ON s.id = ai.site_id
               WHERE s.customer_id = %s AND ai.time > now() - interval '15 minutes'

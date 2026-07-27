@@ -231,12 +231,13 @@
   {% if ap_rows %}
   <table>
     <thead>
-      <tr><th style="width:34%;">AP</th><th style="width:12%;">Status</th><th style="width:9%;">Clients</th><th style="width:13%;">Satisfaction</th><th style="width:9%;">CPU %</th><th>Model</th></tr>
+      <tr><th style="width:26%;">AP</th><th style="width:15%;">MAC</th><th style="width:11%;">Status</th><th style="width:8%;">Clients</th><th style="width:12%;">Satisfaction</th><th style="width:8%;">CPU %</th><th>Model</th></tr>
     </thead>
     <tbody>
       {% for r in ap_rows %}
       <tr>
         <td>{{ r.ap_name or "–" }}</td>
+        <td class="mono">{{ r.ap_mac or "–" }}</td>
         <td><span class="chip {{ r.chip }}">{{ r.status }}</span></td>
         <td>{{ r.num_sta if r.num_sta is not none else "–" }}</td>
         <td>{{ (r.satisfaction ~ "%") if r.satisfaction is not none else "–" }}</td>
