@@ -98,8 +98,11 @@ def _provider_icon(label):
     every ISP/CDN -- fall through to the globe. Codepoints are FA7 Free PUA,
     verified against the vendored fa-brands-400.otf cmap."""
     u = (label or "").upper()
-    # Google family -- cache first (on-net YouTube/Google cache -> YouTube).
-    if "GOOGLE" in u and "CACHE" in u:
+    # Google family -- on-net cache first (GOOGLE-CDN/-CACHE (GMEDIA-*) is the
+    # YouTube-heavy cache node, so it gets the YouTube mark, not the Google one).
+    # Both spellings matched: cdn_override labels were renamed *-CACHE -> *-CDN
+    # on 2026-07-27 and history predating the re-backfill may still say CACHE.
+    if "GOOGLE" in u and ("CACHE" in u or "CDN" in u):
         return "", _ICON_BRANDS   # youtube
     if "YOUTUBE" in u:
         return "", _ICON_BRANDS   # youtube
