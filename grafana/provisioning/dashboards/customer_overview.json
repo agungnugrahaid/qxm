@@ -2527,36 +2527,174 @@
    "id": 210,
    "type": "row",
    "title": "Traffic Flow",
-   "collapsed": true,
-   "gridPos": { "h": 1, "w": 24, "x": 0, "y": 155 },
-   "panels": [
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 155
+   },
+   "panels": []
+  },
+  {
+   "id": 211,
+   "title": "Top Content Providers (by network)",
+   "type": "table",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse_flow"
+   },
+   "gridPos": {
+    "h": 10,
+    "w": 12,
+    "x": 0,
+    "y": 156
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Bytes"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "bytes"
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "gauge",
+         "mode": "gradient"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
     {
-     "id": 211,
-     "title": "Top Content Providers (by network)",
-     "type": "table",
-     "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" },
-     "gridPos": { "h": 10, "w": 12, "x": 0, "y": 156 },
-     "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Bytes" }, "properties": [ { "id": "unit", "value": "bytes" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] } ] },
-     "targets": [ { "refId": "A", "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" }, "format": 1, "queryType": "table", "rawSql": "SELECT provider AS Provider, sum(bytes) AS Bytes FROM flow.provider_hourly WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map WHERE customer_id = $customer_id) AND $__timeFilter(hour) GROUP BY Provider ORDER BY Bytes DESC LIMIT 15" } ]
-    },
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse_flow"
+     },
+     "format": 1,
+     "queryType": "table",
+     "rawSql": "SELECT provider AS Provider, sum(bytes) AS Bytes FROM flow.provider_hourly WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map WHERE customer_id = $customer_id) AND $__timeFilter(hour) GROUP BY Provider ORDER BY Bytes DESC LIMIT 15"
+    }
+   ]
+  },
+  {
+   "id": 212,
+   "title": "Top Internal Users",
+   "type": "table",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse_flow"
+   },
+   "gridPos": {
+    "h": 10,
+    "w": 12,
+    "x": 12,
+    "y": 156
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Bytes"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "bytes"
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "gauge",
+         "mode": "gradient"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
     {
-     "id": 212,
-     "title": "Top Internal Users",
-     "type": "table",
-     "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" },
-     "gridPos": { "h": 10, "w": 12, "x": 12, "y": 156 },
-     "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Bytes" }, "properties": [ { "id": "unit", "value": "bytes" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] } ] },
-     "targets": [ { "refId": "A", "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" }, "format": 1, "queryType": "table", "rawSql": "SELECT internal_ip AS `Internal IP`, sum(bytes) AS Bytes FROM flow.user_hourly WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map WHERE customer_id = $customer_id) AND $__timeFilter(hour) GROUP BY `Internal IP` ORDER BY Bytes DESC LIMIT 15" } ]
-    },
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse_flow"
+     },
+     "format": 1,
+     "queryType": "table",
+     "rawSql": "SELECT internal_ip AS `Internal IP`, sum(bytes) AS Bytes FROM flow.user_hourly WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map WHERE customer_id = $customer_id) AND $__timeFilter(hour) GROUP BY `Internal IP` ORDER BY Bytes DESC LIMIT 15"
+    }
+   ]
+  },
+  {
+   "id": 213,
+   "title": "Top clients by connection-rate / PPS (conntrack-pressure)",
+   "description": "Peak per-minute connection and packet rate per internal client -- the pattern that exhausts the router's conntrack table (e.g. a SYN flood). Rates are OBSERVED (raw): a sampled router under-reports.",
+   "type": "table",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse_flow"
+   },
+   "gridPos": {
+    "h": 10,
+    "w": 24,
+    "x": 0,
+    "y": 166
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Peak conn/s (obs)"
+      },
+      "properties": [
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "gauge",
+         "mode": "gradient"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "SYN-like %"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "percent"
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
     {
-     "id": 213,
-     "title": "Top clients by connection-rate / PPS (conntrack-pressure)",
-     "description": "Peak per-minute connection and packet rate per internal client -- the pattern that exhausts the router's conntrack table (e.g. a SYN flood). Rates are OBSERVED (raw): a sampled router under-reports.",
-     "type": "table",
-     "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" },
-     "gridPos": { "h": 10, "w": 24, "x": 0, "y": 166 },
-     "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Peak conn/s (obs)" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] }, { "matcher": { "id": "byName", "options": "SYN-like %" }, "properties": [ { "id": "unit", "value": "percent" } ] } ] },
-     "targets": [ { "refId": "A", "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse_flow" }, "format": 1, "queryType": "table", "rawSql": "SELECT client_ip AS `Client IP`, round(max(flows)/60.0, 1) AS `Peak conn/s (obs)`, round(max(packets)/60.0, 1) AS `Peak pkt/s (obs)`, round(100*sum(syn_like)/greatest(sum(flows),1)) AS `SYN-like %` FROM flow.client_minute WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map WHERE customer_id = $customer_id) AND $__timeFilter(minute) GROUP BY `Client IP` ORDER BY `Peak conn/s (obs)` DESC LIMIT 15" } ]
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse_flow"
+     },
+     "format": 1,
+     "queryType": "table",
+     "rawSql": "SELECT client_ip AS `Client IP`, round(max(flows)/60.0, 1) AS `Peak conn/s (obs)`, round(max(packets)/60.0, 1) AS `Peak pkt/s (obs)`, round(100*sum(syn_like)/greatest(sum(flows),1)) AS `SYN-like %` FROM flow.client_minute WHERE exporter_ip IN (SELECT exporter_ip FROM flow.exporter_map WHERE customer_id = $customer_id) AND $__timeFilter(minute) GROUP BY `Client IP` ORDER BY `Peak conn/s (obs)` DESC LIMIT 15"
     }
    ]
   }
