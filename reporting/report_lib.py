@@ -646,8 +646,9 @@ def generate_report(customer_id, days=30, start=None, end=None):
     # direct SQL / ClickHouse -- no Grafana image-renderer and no dashboard-clone
     # regeneration on the report path. section() wraps a chart data: URI for the
     # template's image slot; order matches the previous Grafana layout.
-    def section(uri, en, idn):
-        return {"png_uri": uri, "title_en": en, "title_id": idn}
+    def section(uri, en, idn, note_en=None, note_id=None):
+        return {"png_uri": uri, "title_en": en, "title_id": idn,
+                "note_en": note_en, "note_id": note_id}
 
     sections = []
 
@@ -660,6 +661,11 @@ def generate_report(customer_id, days=30, start=None, end=None):
 
     # Traffic composition (flow customers only): Top Content Providers as a
     # native branded table (brand glyphs), Top Internal Users as a bar chart.
+    # Both carry the sampling caveat -- see the .note comment in the template
+    # for why the byte totals can't be taken as absolute. Shown unconditionally
+    # rather than per-router: traffic-flow sampling is the standing default for
+    # new routers (it is what bounds flows_raw disk growth), and the section
+    # that does report real volume is Internet Traffic, from interface counters.
     if flow_enabled(customer_id):
         prov_rows = collect_flow_providers(customer_id, from_ms, to_ms)
         if prov_rows:
@@ -667,12 +673,24 @@ def generate_report(customer_id, days=30, start=None, end=None):
                 "rows": prov_rows,
                 "title_en": "Top Content Providers",
                 "title_id": "Konten / Layanan Teratas",
+                "note_en": ("Indicative figures based on sampled traffic data. "
+                            "Provider ranking is representative; absolute "
+                            "volumes are lower than actual usage."),
+                "note_id": ("Angka indikatif berdasarkan sampel data trafik. "
+                            "Peringkat layanan bersifat representatif; volume "
+                            "absolut lebih rendah dari pemakaian sebenarnya."),
             })
         u_labels, u_values, u_human = collect_flow_users(customer_id, from_ms, to_ms)
         if u_labels:
             sections.append(section(
                 charts.hbar_chart(u_labels, u_values, u_human),
-                "Top Internal Users", "Pengguna Internal Teratas"))
+                "Top Internal Users", "Pengguna Internal Teratas",
+                note_en=("Indicative figures based on sampled traffic data. "
+                         "User ranking is representative; absolute volumes are "
+                         "lower than actual usage."),
+                note_id=("Angka indikatif berdasarkan sampel data trafik. "
+                         "Peringkat pengguna bersifat representatif; volume "
+                         "absolut lebih rendah dari pemakaian sebenarnya.")))
 
     # Path latency / jitter / loss -- one chart per router with path data.
     for r in ping_routers:

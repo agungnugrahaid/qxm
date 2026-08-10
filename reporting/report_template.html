@@ -95,6 +95,18 @@
     font-size: 11pt; color: #1e4b8f; vertical-align: -1pt;
   }
   .pv-name { font-size: 9pt; }
+  /* Caveat under the flow-derived sections. Traffic-flow is packet-sampled on
+     the CPE (1:100) to bound flows_raw disk growth, and MikroTik reports
+     near-full conntrack byte counts on whichever flows survive -- so the byte
+     totals understate reality by a distribution-dependent factor that cannot
+     be scaled back up. Ranking/share survives; absolute volume does not. The
+     authoritative volume figure is the Internet Traffic section, which comes
+     from interface counters rather than flow records. */
+  .note {
+    font-size: 7.5pt; color: #737782; font-style: italic;
+    margin: 5pt 0 0; line-height: 1.45;
+  }
+  .note .id { color: #a3a7b2; }
   .card {
     background: #ffffff; border: 1pt solid #dae3f4; border-radius: 6pt;
     padding: 11pt 13pt; page-break-inside: avoid;
@@ -243,6 +255,9 @@
   </table>
   {% else %}
   <img class="panel-img" src="{{ s.png_uri }}">
+  {% endif %}
+  {% if s.note_en %}
+  <p class="note">{{ s.note_en }}<br><span class="id">{{ s.note_id }}</span></p>
   {% endif %}
 </div>
 {% endfor %}
