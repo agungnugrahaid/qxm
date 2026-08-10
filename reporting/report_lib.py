@@ -724,7 +724,7 @@ def generate_report(customer_id, days=30, start=None, end=None):
     with open(LOGO_FULL_PATH if logo_full else LOGO_MARK_PATH, "rb") as f:
         logo_uri = "data:image/png;base64," + base64.b64encode(f.read()).decode()
 
-    footer_left = f"{customer_name} · {period_en} · Generated automatically — GMedia NOC"
+    footer_left = f"{customer_name} · {period_en} · Generated automatically — GMEDIA"
     context = {
         "customer_name": customer_name,
         "period_en": period_en,

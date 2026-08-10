@@ -40,6 +40,29 @@
   tbody tr:nth-child(even) td { background: #f8f9ff; }
   tr.total-row td { font-weight: 700; color: #131c28; border-top: 1pt solid #c3c6d2; }
   .mono { font-family: monospace; font-size: 8.5pt; }
+  /* AP table carries a MAC column + long controller-generated AP names
+     (e.g. AP_LANTAI_1_DEPAN_PANGGUNG_SELATAN, 58 chars at Eastparc). Auto
+     table-layout sizes columns to min-content, and underscores are not CSS
+     break opportunities, so the table overflowed the page box. Fixed layout
+     makes the declared widths authoritative; anywhere-wrap keeps any cell
+     that still exceeds its column inside it. */
+  table.ap-table { table-layout: fixed; }
+  /* border-box is load-bearing: under fixed layout WeasyPrint treats the
+     declared width as the CONTENT box, so with content-box the 8pt of
+     horizontal padding is added to each of the 7 columns and the table
+     lands ~75px past the page edge even though the widths sum to 100%. */
+  table.ap-table th, table.ap-table td {
+    box-sizing: border-box; padding: 3pt 4pt;
+  }
+  table.ap-table thead th { font-size: 7pt; letter-spacing: 0.02em; }
+  table.ap-table .mono { font-size: 7.5pt; }
+  /* Only the AP-name column gets anywhere-wrap -- applied to every cell it
+     also breaks the status chip mid-word (it overrides white-space:nowrap
+     in WeasyPrint). Every other column is sized to fit its content. */
+  table.ap-table td.ap-name { overflow-wrap: anywhere; }
+  /* Multi-line AP names make it easy for a row to straddle a page break and
+     leave an orphaned MAC at the foot of the page. */
+  table.ap-table tr { break-inside: avoid; }
   .chip {
     display: inline-block; padding: 1pt 6pt; border-radius: 3pt;
     font-size: 7.5pt; font-weight: 700; letter-spacing: 0.03em;
@@ -95,7 +118,7 @@
 
   <div style="position: absolute; top: 88mm; left: 0; right: 0;">
     <p style="font-size: 10pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #00639b; margin: 0 0 7pt;">
-      Monthly Network Performance Report</p>
+      Network Performance Report</p>
     <h1 style="font-size: 26pt; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin: 0 0 5pt;">{{ customer_name }}</h1>
     <p style="font-size: 13pt; color: #434751; margin: 0 0 18pt;">Reporting Period: {{ period_en }}</p>
     <div class="kpi-grid">
@@ -229,14 +252,14 @@
   <h2 class="section-title">Access Point Status</h2>
   <p class="section-sub">Status Access Point &mdash; {{ ap_summary_en }} / {{ ap_summary_id }}</p>
   {% if ap_rows %}
-  <table>
+  <table class="ap-table">
     <thead>
-      <tr><th style="width:26%;">AP</th><th style="width:15%;">MAC</th><th style="width:11%;">Status</th><th style="width:8%;">Clients</th><th style="width:12%;">Satisfaction</th><th style="width:8%;">CPU %</th><th>Model</th></tr>
+      <tr><th style="width:26%;">AP</th><th style="width:20%;">MAC</th><th style="width:11%;">Status</th><th style="width:9%;">Clients</th><th style="width:14%;">Satisfaction</th><th style="width:7%;">CPU %</th><th style="width:13%;">Model</th></tr>
     </thead>
     <tbody>
       {% for r in ap_rows %}
       <tr>
-        <td>{{ r.ap_name or "–" }}</td>
+        <td class="ap-name">{{ r.ap_name or "–" }}</td>
         <td class="mono">{{ r.ap_mac or "–" }}</td>
         <td><span class="chip {{ r.chip }}">{{ r.status }}</span></td>
         <td>{{ r.num_sta if r.num_sta is not none else "–" }}</td>
