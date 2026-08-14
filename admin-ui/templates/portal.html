@@ -583,7 +583,9 @@ function drawInventory(body, d) {
     let t = '<div class="tscroll"><table class="ptable"><thead><tr><th>Access point model</th>' +
             '<th style="text-align:right;">Count</th></tr></thead><tbody>';
     for (const m of d.ap_models) {
-      t += `<tr><td>${esc(m.model || "–")}</td><td class="num">${m.count}</td></tr>`;
+      const code = m.code && m.code !== m.model
+        ? ` <span style="color:#a3a7b2;font-size:0.75rem;">${esc(m.code)}</span>` : "";
+      t += `<tr><td>${esc(m.model || "–")}${code}</td><td class="num">${m.count}</td></tr>`;
     }
     h += box("Access points", t + "</tbody></table></div>");
   }
