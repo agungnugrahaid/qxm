@@ -49,13 +49,27 @@ from datetime import datetime, timedelta, timezone
 import psycopg2
 import psycopg2.extras
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from dashboard_share import share_dashboard_for_customer, slugify
+from portal_auth import find_customer_user, touch_last_login, verify_password
 from deploy_lib import load_templates, push_to_router
-from report_lib import WIB, generate_report
+from report_lib import (
+    WIB,
+    collect_ap_rows,
+    collect_clients,
+    collect_flow_providers,
+    collect_flow_users,
+    collect_kpis,
+    collect_path,
+    collect_resource,
+    collect_traffic,
+    collect_wifi_quality,
+    flow_enabled,
+    generate_report,
+)
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 INGEST_BASE_URL = os.environ.get("INGEST_BASE_URL", "https://monitor.yourisp.com")
@@ -143,22 +157,44 @@ def _sign(payload: str) -> str:
     return hmac.new(SESSION_SECRET, payload.encode(), hashlib.sha256).hexdigest()
 
 
-def make_session_cookie(username: str) -> str:
-    payload = f"{username}:{int(time.time()) + SESSION_HOURS * 3600}"
+# Session roles. "admin" is the NOC operator (full Console); "customer" is a
+# portal login from customer_users (migration 028) restricted to /portal.
+ROLE_ADMIN = "admin"
+ROLE_CUSTOMER = "customer"
+
+
+def make_session_cookie(username: str, role: str = ROLE_ADMIN, customer_id=None) -> str:
+    """payload = username:role:customer_id:expiry  (customer_id "-" for admins).
+
+    The customer_id lives INSIDE the signed payload, never in the URL or a
+    form field -- that is the whole point of the portal: a customer cannot
+    ask for another customer's data because they never get to name it.
+    """
+    expires = int(time.time()) + SESSION_HOURS * 3600
+    payload = f"{username}:{role}:{customer_id if customer_id is not None else '-'}:{expires}"
     return base64.urlsafe_b64encode(payload.encode()).decode() + "." + _sign(payload)
 
 
 def verify_session_cookie(value: str):
-    """Returns the username, or None if the cookie is missing/tampered/expired."""
+    """Returns (username, role, customer_id|None), or None if the cookie is
+    missing/tampered/expired. Cookies issued before migration 028 have the old
+    two-field payload and simply fail to parse -- those users re-login, which
+    is the safe direction."""
     try:
         encoded, sig = value.rsplit(".", 1)
         payload = base64.urlsafe_b64decode(encoded.encode()).decode()
         if not hmac.compare_digest(_sign(payload), sig):
             return None
-        username, expires = payload.rsplit(":", 1)
+        username, role, customer_id, expires = payload.rsplit(":", 3)
         if time.time() > int(expires):
             return None
-        return username
+        if role not in (ROLE_ADMIN, ROLE_CUSTOMER):
+            return None
+        # A customer session without a customer_id would fall through to
+        # "no filter" downstream; refuse it outright.
+        if role == ROLE_CUSTOMER and not customer_id.isdigit():
+            return None
+        return username, role, (int(customer_id) if customer_id.isdigit() else None)
     except Exception:
         return None
 
@@ -169,14 +205,32 @@ async def require_login(request: Request, call_next):
     # /health stays open for the watchdog; /static for the login page's CSS.
     if path in ("/login", "/health") or path.startswith("/static/"):
         return await call_next(request)
-    user = verify_session_cookie(request.cookies.get(SESSION_COOKIE, ""))
-    if user is None:
+    session = verify_session_cookie(request.cookies.get(SESSION_COOKIE, ""))
+    if session is None:
         if request.method == "GET":
             target = path + ("?" + str(request.url.query) if request.url.query else "")
             return RedirectResponse("/login?next=" + urllib.parse.quote(target, safe=""), status_code=303)
         return RedirectResponse("/login", status_code=303)
+    user, role, customer_id = session
+    # Deny-by-default for customers: they reach ONLY the portal and logout.
+    # Written as an allowlist so a new admin route is never accidentally
+    # customer-reachable -- adding a route must not widen this.
+    if role == ROLE_CUSTOMER and not (path == "/portal" or path.startswith("/portal/") or path == "/logout"):
+        return RedirectResponse("/portal", status_code=303)
     request.state.session_user = user
+    request.state.session_role = role
+    request.state.session_customer_id = customer_id
     return await call_next(request)
+
+
+def portal_customer_id(request: Request) -> int:
+    """The customer this request may see, taken from the signed session only.
+    Raises for an admin, who has no single customer -- admins preview the
+    portal via /portal/{id} (a separate admin-only route), not via this."""
+    cid = getattr(request.state, "session_customer_id", None)
+    if cid is None:
+        raise PermissionError("no customer bound to this session")
+    return cid
 
 
 def _safe_next(next_url: str) -> str:
@@ -201,22 +255,252 @@ def login_submit(request: Request, username: str = Form(""), password: str = For
     # blunts online brute-forcing without needing a lockout table.
     user_ok = secrets.compare_digest(username, ADMIN_UI_USER)
     pass_ok = ADMIN_UI_PASSWORD and secrets.compare_digest(password, ADMIN_UI_PASSWORD)
+
+    role, customer_id, target = ROLE_ADMIN, None, _safe_next(next)
     if not (user_ok and pass_ok):
-        time.sleep(1)
-        error = "Invalid username or password." if ADMIN_UI_PASSWORD else "Login disabled: ADMIN_UI_PASSWORD is not set."
-        return templates.TemplateResponse(
-            "login.html", {"request": request, "error": error, "next": _safe_next(next)}, status_code=401
-        )
-    resp = RedirectResponse(_safe_next(next), status_code=303)
+        # Not the NOC operator -- try a customer portal login (migration 028).
+        # Same form, same cookie; the role in the session decides what they see.
+        cust = None
+        try:
+            conn = get_conn()
+            cust = find_customer_user(conn, username)
+            ok = cust is not None and verify_password(password, cust["password_hash"])
+            if ok:
+                touch_last_login(conn, cust["id"])
+            conn.close()
+        except Exception:
+            ok = False
+        if not ok:
+            time.sleep(1)
+            error = "Invalid username or password." if ADMIN_UI_PASSWORD else "Login disabled: ADMIN_UI_PASSWORD is not set."
+            return templates.TemplateResponse(
+                "login.html", {"request": request, "error": error, "next": _safe_next(next)}, status_code=401
+            )
+        role, customer_id = ROLE_CUSTOMER, cust["customer_id"]
+        # Customers always land on the portal, never on a ?next= they were
+        # handed -- otherwise a crafted link bounces them into an admin path
+        # (which the middleware would reject anyway, but this is cleaner).
+        target = "/portal"
+
+    resp = RedirectResponse(target, status_code=303)
     resp.set_cookie(
         SESSION_COOKIE,
-        make_session_cookie(username),
+        make_session_cookie(username, role, customer_id),
         max_age=SESSION_HOURS * 3600,
         httponly=True,
         secure=COOKIE_SECURE,
         samesite="lax",
     )
     return resp
+
+
+# --- Customer portal ---------------------------------------------------------
+# Everything here reads the customer_id from the signed session via
+# portal_customer_id(request) -- never from the path, query or form. The
+# middleware already restricts a customer session to /portal*; this is the
+# second half of that guarantee.
+
+# Grafana-style relative ranges. The portal is meant to feel like the customer
+# dashboard we cannot share, so the range set matches the dashboard's, not the
+# report's fixed 30-day window.
+PORTAL_RANGES = {
+    "6h": timedelta(hours=6), "24h": timedelta(hours=24),
+    "7d": timedelta(days=7), "30d": timedelta(days=30), "90d": timedelta(days=90),
+}
+PORTAL_RANGE_DEFAULT = "24h"
+
+
+def _portal_window(rng: str):
+    rng = rng if rng in PORTAL_RANGES else PORTAL_RANGE_DEFAULT
+    end = datetime.now(WIB)
+    return rng, end - PORTAL_RANGES[rng], end
+
+
+def _epochs(times):
+    """uPlot wants x as seconds. gapfill can emit None-free rows, but guard
+    anyway so one bad bucket can't 500 the panel."""
+    return [int(t.timestamp()) if t is not None else None for t in times]
+
+
+def _num(v):
+    """Decimal/None -> float/None so json can serialise it."""
+    return None if v is None else float(v)
+
+
+def portal_panel_list(customer_id, start, end):
+    """Panel descriptors for the portal, mirroring the customer dashboard's
+    layout. Cheap -- no series data, just what exists for this customer."""
+    panels = [
+        {"id": "traffic", "kind": "area",
+         "title_en": "Internet Traffic", "title_id": "Trafik Internet", "unit": "bps"},
+    ]
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT r.id, r.identity_name FROM routers r
+        WHERE r.customer_id = %s
+          AND EXISTS (SELECT 1 FROM path_metrics pm
+                      WHERE pm.router_id = r.id AND pm.time >= %s AND pm.time < %s)
+        ORDER BY r.identity_name
+        """,
+        (customer_id, start, end),
+    )
+    for r in cur.fetchall():
+        panels.append({"id": f"path:{r['id']}", "kind": "line", "unit": "ms / %",
+                       "title_en": f"Path Latency, Jitter & Loss — {r['identity_name']}",
+                       "title_id": f"Latensi, Jitter & Kehilangan Paket — {r['identity_name']}"})
+    conn.close()
+
+    panels += [
+        {"id": "resource", "kind": "line", "unit": "%",
+         "title_en": "Router Resource Usage (CPU / RAM / Disk)",
+         "title_id": "Penggunaan Sumber Daya Router (CPU / RAM / Disk)"},
+        {"id": "clients", "kind": "line", "unit": "clients",
+         "title_en": "Wi-Fi Clients Over Time",
+         "title_id": "Jumlah Perangkat Wi-Fi dari Waktu ke Waktu"},
+        {"id": "wifi", "kind": "line", "unit": "",
+         "title_en": "Wi-Fi Quality (Signal / Satisfaction / Retry)",
+         "title_id": "Kualitas Wi-Fi (Sinyal / Kepuasan / Pengulangan)"},
+    ]
+    if flow_enabled(customer_id):
+        panels += [
+            {"id": "flow_providers", "kind": "table",
+             "title_en": "Top Content Providers", "title_id": "Konten / Layanan Teratas",
+             "note_en": ("Indicative figures based on sampled traffic data. Provider "
+                         "ranking is representative; absolute volumes are lower than "
+                         "actual usage."),
+             "note_id": ("Angka indikatif berdasarkan sampel data trafik. Peringkat "
+                         "layanan bersifat representatif; volume absolut lebih rendah "
+                         "dari pemakaian sebenarnya.")},
+            {"id": "flow_users", "kind": "bar",
+             "title_en": "Top Internal Users", "title_id": "Pengguna Internal Teratas",
+             "note_en": ("Indicative figures based on sampled traffic data. User "
+                         "ranking is representative; absolute volumes are lower than "
+                         "actual usage."),
+             "note_id": ("Angka indikatif berdasarkan sampel data trafik. Peringkat "
+                         "pengguna bersifat representatif; volume absolut lebih rendah "
+                         "dari pemakaian sebenarnya.")},
+        ]
+    return panels
+
+
+@app.get("/portal")
+def portal_home(request: Request, range: str = PORTAL_RANGE_DEFAULT):
+    if getattr(request.state, "session_role", None) == ROLE_ADMIN:
+        # Admins have no single customer -- send them to the Console.
+        return RedirectResponse("/customers", status_code=303)
+    customer_id = portal_customer_id(request)
+    rng, start, end = _portal_window(range)
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM customers WHERE id = %s", (customer_id,))
+    row = cur.fetchone()
+    conn.close()
+
+    # The shell renders immediately; panels stream in over /portal/api/series
+    # so a slow 90-day scan never blocks the page.
+    return templates.TemplateResponse(
+        "portal.html",
+        {"request": request,
+         "customer_name": row["name"] if row else "",
+         "panels": portal_panel_list(customer_id, start, end),
+         "ranges": list(PORTAL_RANGES.keys()),
+         "range": rng,
+         "user": request.state.session_user},
+    )
+
+
+@app.get("/portal/api/kpis")
+def portal_api_kpis(request: Request, range: str = PORTAL_RANGE_DEFAULT):
+    customer_id = portal_customer_id(request)
+    _, start, end = _portal_window(range)
+    try:
+        kpis = collect_kpis(customer_id, start, end)
+    except Exception:
+        kpis = []
+    return JSONResponse({"kpis": [{"en": en, "id": idn, "value": v} for en, idn, v in kpis]})
+
+
+@app.get("/portal/api/series")
+def portal_api_series(request: Request, panel: str, range: str = PORTAL_RANGE_DEFAULT):
+    """One panel's data as JSON. customer_id comes from the session, so `panel`
+    is the only client input -- and a path:<id> router is re-checked against
+    this customer before it is queried."""
+    customer_id = portal_customer_id(request)
+    _, start, end = _portal_window(range)
+    out = {"panel": panel, "times": [], "series": {}}
+
+    try:
+        if panel == "traffic":
+            times, down, up = collect_traffic(customer_id, start, end)
+            out["times"] = _epochs(times)
+            out["series"] = {"Download": [_num(v) for v in down],
+                             "Upload": [_num(v) for v in up]}
+        elif panel.startswith("path:"):
+            router_id = int(panel.split(":", 1)[1])
+            # Ownership check -- without it a customer could read another
+            # customer's router by guessing an id.
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM routers WHERE id = %s AND customer_id = %s",
+                        (router_id, customer_id))
+            owned = cur.fetchone() is not None
+            conn.close()
+            if not owned:
+                return JSONResponse({"error": "not found"}, status_code=404)
+            times, series = collect_path(router_id, start, end)
+            out["times"] = _epochs(times)
+            out["series"] = {k: [_num(x) for x in v] for k, v in series.items()}
+        elif panel == "resource":
+            times, series = collect_resource(customer_id, start, end)
+            out["times"] = _epochs(times)
+            out["series"] = {k: [_num(x) for x in v] for k, v in series.items()}
+        elif panel == "clients":
+            times, series = collect_clients(customer_id, start, end)
+            out["times"] = _epochs(times)
+            out["series"] = {k: [_num(x) for x in v] for k, v in series.items()}
+        elif panel == "wifi":
+            times, sig, sat, ret = collect_wifi_quality(customer_id, start, end)
+            out["times"] = _epochs(times)
+            out["series"] = {"Signal (dBm)": [_num(v) for v in sig],
+                             "Satisfaction %": [_num(v) for v in sat],
+                             "Retry %": [_num(v) for v in ret]}
+        elif panel == "flow_providers":
+            from_ms, to_ms = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+            out["rows"] = collect_flow_providers(customer_id, from_ms, to_ms)
+        elif panel == "flow_users":
+            from_ms, to_ms = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+            labels, values, human = collect_flow_users(customer_id, from_ms, to_ms)
+            out["rows"] = [{"label": l, "value": v, "human": h}
+                           for l, v, h in zip(labels, values, human)]
+        elif panel == "aps":
+            rows, summary_en, summary_id = collect_ap_rows(customer_id)
+            out["rows"] = rows
+            out["summary_en"], out["summary_id"] = summary_en, summary_id
+        else:
+            return JSONResponse({"error": "unknown panel"}, status_code=404)
+    except Exception as e:
+        # A single failing panel must not take the page down.
+        return JSONResponse({"panel": panel, "error": str(e)[:200]}, status_code=200)
+
+    return JSONResponse(out)
+
+
+@app.get("/portal/report")
+def portal_report(request: Request, days: int = 30):
+    """The customer's own PDF. Same generator as the Console button, but the
+    id comes from the session, so ?customer_id= cannot be forged."""
+    customer_id = portal_customer_id(request)
+    days = max(1, min(int(days), 90))
+    customer_name, pdf_bytes = generate_report(customer_id, days=days)
+    filename = f"{slugify(customer_name)}-report.pdf"
+    return Response(
+        pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/logout")

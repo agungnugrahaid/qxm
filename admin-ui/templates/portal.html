@@ -1,0 +1,259 @@
+{#
+  Customer portal -- the live dashboard customers get instead of a Grafana
+  login (a Grafana OSS Viewer can POST arbitrary SQL to /api/ds/query against
+  any datasource, so a customer account there would expose every customer).
+
+  Deliberately NOT extending base.html: that template carries the NOC sidebar
+  (routers, sites, deploys, config snapshots), none of which a customer may
+  see. Standalone makes it impossible to render the admin nav here by accident.
+
+  Panels stream in one request each from /portal/api/series so a slow 90-day
+  scan never blocks the page, and charts are uPlot (vendored, MIT) for the
+  crosshair/tooltip/zoom feel of the dashboard this replaces.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ customer_name }} — Network Quality</title>
+  <link rel="icon" type="image/png" href="/static/logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/dashboard.css?v=2">
+  <link rel="stylesheet" href="/static/uPlot.min.css">
+  <script src="/static/uPlot.iife.min.js"></script>
+  <style>
+    body { background: #f6f8fc; }
+    .portal-wrap { max-width: 1180px; margin: 0 auto; padding: 1.2rem 1rem 3rem; }
+    .portal-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 1rem; padding: 0.8rem 0 1rem; flex-wrap: wrap;
+    }
+    .portal-brand { display: flex; align-items: center; gap: 0.6rem; font-weight: 700; }
+    .portal-brand img { height: 26px; width: auto; }
+    .toolbar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .range a {
+      display: inline-block; padding: 0.32rem 0.7rem; margin-right: 0.3rem;
+      border: 1px solid #dae3f4; border-radius: 6px; background: #fff;
+      text-decoration: none; font-size: 0.85rem; color: #434751;
+    }
+    .range a.on { background: #1e4b8f; border-color: #1e4b8f; color: #fff; }
+    .kpi-row { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-bottom: 1.4rem; }
+    .kpi-box {
+      flex: 1 1 170px; background: #fff; border: 1px solid #dae3f4;
+      border-radius: 8px; padding: 0.85rem 1rem;
+    }
+    .kpi-box .v { font-size: 1.4rem; font-weight: 700; color: #1e4b8f; line-height: 1.15; }
+    .kpi-box .l { font-size: 0.72rem; color: #737782; margin-top: 0.2rem; }
+    .panel {
+      background: #fff; border: 1px solid #dae3f4; border-radius: 8px;
+      padding: 0.9rem 1rem 1rem; margin-bottom: 1rem;
+    }
+    .panel h2 { font-size: 0.95rem; margin: 0 0 0.15rem; }
+    .panel .sub { font-size: 0.75rem; color: #737782; font-style: italic; margin: 0 0 0.7rem; }
+    .panel .note { font-size: 0.7rem; color: #737782; font-style: italic; margin-top: 0.5rem; }
+    .panel .state { color: #737782; font-size: 0.85rem; padding: 1.5rem 0; text-align: center; }
+    .ptable { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .ptable th { text-align: left; color: #737782; font-weight: 600; font-size: 0.7rem;
+                 text-transform: uppercase; letter-spacing: 0.04em; padding: 0.3rem 0.4rem; }
+    .ptable td { padding: 0.32rem 0.4rem; border-top: 1px solid #eef2fa; }
+    .ptable td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .bar { height: 8px; background: #1e4b8f; border-radius: 3px; }
+    .updated { font-size: 0.72rem; color: #a3a7b2; }
+    .u-tooltip {
+      position: absolute; pointer-events: none; z-index: 100; background: #131c28;
+      color: #fff; font-size: 0.72rem; padding: 0.4rem 0.55rem; border-radius: 5px;
+      white-space: nowrap; transform: translate(10px, -50%); display: none;
+    }
+  </style>
+</head>
+<body>
+<div class="portal-wrap">
+
+  <div class="portal-bar">
+    <div class="portal-brand">
+      <img src="/static/logo.png" alt="GMEDIA">
+      <span>{{ customer_name }}</span>
+    </div>
+    <div class="toolbar">
+      <span class="range">
+        {% for r in ranges %}
+        <a href="/portal?range={{ r }}" class="{{ 'on' if r == range else '' }}">{{ r }}</a>
+        {% endfor %}
+      </span>
+      <a class="btn" href="/portal/report?days=30">PDF report</a>
+      <form method="post" action="/logout" style="margin:0;">
+        <button class="btn" type="submit">Sign out</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="kpi-row" id="kpis"></div>
+
+  <div id="panels">
+    {% for p in panels %}
+    <div class="panel" data-panel="{{ p.id }}" data-kind="{{ p.kind }}" data-unit="{{ p.unit or '' }}">
+      <h2>{{ p.title_en }}</h2>
+      <p class="sub">{{ p.title_id }}</p>
+      <div class="body"><div class="state">Loading…</div></div>
+      {% if p.note_en %}
+      <p class="note">{{ p.note_en }}<br><span style="color:#a3a7b2;">{{ p.note_id }}</span></p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <p class="updated" id="updated"></p>
+</div>
+
+<script>
+const RANGE = {{ range|tojson }};
+// Grafana's categorical order, so a customer moving between the two sees the
+// same colour for the same series.
+const COLORS = ["#1e4b8f","#00a3a3","#e0752d","#7b4fbd","#c2334d","#3d8b40","#b08800","#0d7fa6"];
+const fmtBps = v => {
+  if (v == null) return "–";
+  const u = ["bps","Kbps","Mbps","Gbps","Tbps"]; let i = 0; v = Math.abs(v);
+  while (v >= 1000 && i < u.length - 1) { v /= 1000; i++; }
+  return v.toFixed(i ? 2 : 0) + " " + u[i];
+};
+const fmtNum = v => v == null ? "–" : (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2));
+const fmtBytes = v => {
+  const u = ["B","KiB","MiB","GiB","TiB"]; let i = 0; v = Number(v) || 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(i > 1 ? 2 : 0) + " " + u[i];
+};
+
+// uPlot has no built-in tooltip; this is the standard cursor plugin pattern.
+function tooltipPlugin(fmt) {
+  let el, over;
+  return {
+    hooks: {
+      init: u => {
+        el = document.createElement("div");
+        el.className = "u-tooltip";
+        u.over.appendChild(el);
+        over = u.over;
+        over.addEventListener("mouseleave", () => el.style.display = "none");
+      },
+      setCursor: u => {
+        const { idx, left, top } = u.cursor;
+        if (idx == null || left < 0) { el.style.display = "none"; return; }
+        const when = new Date(u.data[0][idx] * 1000).toLocaleString();
+        let html = "<b>" + when + "</b>";
+        for (let s = 1; s < u.series.length; s++) {
+          if (u.series[s].show === false) continue;
+          const v = u.data[s][idx];
+          if (v == null) continue;
+          html += "<br>" + u.series[s].label + ": " + fmt(v);
+        }
+        el.innerHTML = html;
+        el.style.display = "block";
+        el.style.left = left + "px";
+        el.style.top = top + "px";
+      }
+    }
+  };
+}
+
+function drawChart(host, times, series, kind, unit) {
+  host.innerHTML = "";
+  const names = Object.keys(series);
+  if (!times.length || !names.length) {
+    host.innerHTML = '<div class="state">No data for this period.<br>Belum ada data untuk periode ini.</div>';
+    return;
+  }
+  const fmt = unit === "bps" ? fmtBps : fmtNum;
+  const data = [times, ...names.map(n => series[n])];
+  const opts = {
+    width: host.clientWidth || 900,
+    height: 240,
+    cursor: { drag: { x: true, y: false } },   // drag-to-zoom, like the dashboard
+    legend: { live: false },
+    scales: { x: { time: true } },
+    axes: [
+      {},
+      { size: 58, values: (u, ticks) => ticks.map(v => unit === "bps" ? fmtBps(v) : fmtNum(v)) }
+    ],
+    series: [
+      {},
+      ...names.map((n, i) => ({
+        label: n,
+        stroke: COLORS[i % COLORS.length],
+        width: 1.6,
+        fill: kind === "area" ? COLORS[i % COLORS.length] + "22" : undefined,
+        spanGaps: false,
+        points: { show: false },
+      }))
+    ],
+    plugins: [tooltipPlugin(fmt)],
+  };
+  const u = new uPlot(opts, data, host);
+  // Keep the chart the width of its panel on resize/rotate.
+  new ResizeObserver(() => u.setSize({ width: host.clientWidth, height: 240 })).observe(host);
+}
+
+function drawTable(host, rows) {
+  if (!rows || !rows.length) {
+    host.innerHTML = '<div class="state">No data for this period.</div>'; return;
+  }
+  let h = '<table class="ptable"><thead><tr><th>Provider</th><th style="text-align:right;">Traffic</th></tr></thead><tbody>';
+  for (const r of rows) h += `<tr><td>${r.provider}</td><td class="num">${r.bytes_human}</td></tr>`;
+  host.innerHTML = h + "</tbody></table>";
+}
+
+function drawBars(host, rows) {
+  if (!rows || !rows.length) {
+    host.innerHTML = '<div class="state">No data for this period.</div>'; return;
+  }
+  const max = Math.max(...rows.map(r => r.value || 0)) || 1;
+  let h = '<table class="ptable"><tbody>';
+  for (const r of rows) {
+    const pct = Math.max(2, Math.round(100 * (r.value || 0) / max));
+    h += `<tr><td style="width:160px;">${r.label}</td>` +
+         `<td><div class="bar" style="width:${pct}%"></div></td>` +
+         `<td class="num" style="width:90px;">${r.human || fmtBytes(r.value)}</td></tr>`;
+  }
+  host.innerHTML = h + "</tbody></table>";
+}
+
+async function loadPanel(el) {
+  const id = el.dataset.panel, kind = el.dataset.kind;
+  const body = el.querySelector(".body");
+  try {
+    const r = await fetch(`/portal/api/series?panel=${encodeURIComponent(id)}&range=${RANGE}`);
+    const d = await r.json();
+    if (d.error) { body.innerHTML = `<div class="state">Unavailable right now.</div>`; return; }
+    if (kind === "table") drawTable(body, d.rows);
+    else if (kind === "bar") drawBars(body, d.rows);
+    else drawChart(body, d.times, d.series, kind, (el.dataset.unit || ""));
+  } catch (e) {
+    body.innerHTML = `<div class="state">Unavailable right now.</div>`;
+  }
+}
+
+async function loadKpis() {
+  try {
+    const r = await fetch(`/portal/api/kpis?range=${RANGE}`);
+    const d = await r.json();
+    document.getElementById("kpis").innerHTML = (d.kpis || []).map(k =>
+      `<div class="kpi-box"><div class="v">${k.value}</div>` +
+      `<div class="l">${k.en}<br><span style="color:#a3a7b2;">${k.id}</span></div></div>`
+    ).join("");
+  } catch (e) { /* KPIs are a nice-to-have; panels still render */ }
+}
+
+function refreshAll() {
+  loadKpis();
+  document.querySelectorAll("#panels .panel").forEach(loadPanel);
+  document.getElementById("updated").textContent =
+    "Updated " + new Date().toLocaleTimeString() + " · auto-refreshes every 60s";
+}
+
+refreshAll();
+setInterval(refreshAll, 60000);
+</script>
+</body>
+</html>
