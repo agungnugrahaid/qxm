@@ -273,6 +273,12 @@ function tooltipPlugin(fmt) {
   };
 }
 
+// One place that decides how wide a chart is. getBoundingClientRect is
+// fractional and reflects transforms/zoom, which clientWidth rounds away.
+function chartWidth(host) {
+  return Math.floor(host.getBoundingClientRect().width);
+}
+
 function drawChart(host, times, series, kind, unit) {
   host.innerHTML = "";
   const names = Object.keys(series);
@@ -280,18 +286,22 @@ function drawChart(host, times, series, kind, unit) {
     host.innerHTML = '<div class="state">No data for this period.<br>Belum ada data untuk periode ini.</div>';
     return;
   }
-  // Drawing into a host with no width yet would bake in a wrong size.
-  if (host.clientWidth < 50) {
-    requestAnimationFrame(() => drawChart(host, times, series, kind, unit));
+  // uPlot stores its canvas size in PIXELS, so a chart drawn while its section
+  // is hidden (clientWidth 0) or mid-layout would keep that wrong size. Rather
+  // than guess or spin on rAF, park the data and draw when the section is
+  // actually shown -- activate() calls drawPending().
+  if (chartWidth(host) < 50) {
+    host._pending = { times, series, kind, unit };
     return;
   }
+  host._pending = null;
   const fmt = unit === "bps" ? fmtBps : fmtNum;
   const data = [times, ...names.map(n => series[n])];
   const opts = {
     // No fallback width: a guess here (it used to be 900) sticks permanently,
     // because uPlot stores the canvas size in pixels. If the host has no width
     // yet the caller retries on the next frame.
-    width: host.clientWidth,
+    width: chartWidth(host),
     height: 240,
     cursor: { drag: { x: true, y: false } },   // drag-to-zoom, like the dashboard
     legend: { live: false },
@@ -324,9 +334,14 @@ function drawChart(host, times, series, kind, unit) {
   // collapses clientWidth to 0 and the observer fires -- resizing a uPlot to
   // width 0 wrecks it, and it does not recover when the section comes back.
   new ResizeObserver(() => {
-    const w = host.clientWidth;
-    if (w > 0) u.setSize({ width: w, height: 240 });
+    const w = chartWidth(host);
+    if (w > 50) u.setSize({ width: w, height: 240 });
   }).observe(host);
+  // The rect can still settle after this frame (fonts, scrollbar arriving).
+  requestAnimationFrame(() => {
+    const w = chartWidth(host);
+    if (w > 50 && w !== u.width) u.setSize({ width: w, height: 240 });
+  });
 }
 
 function drawTable(host, rows) {
@@ -504,15 +519,28 @@ async function loadSection(id, force) {
     "Updated " + new Date().toLocaleTimeString() + " · auto-refreshes every 60s";
 }
 
+// Draw anything that was parked while hidden, and re-measure charts that were
+// sized under different conditions (scrollbar, window resize, zoom).
+function drawPending(id) {
+  document.getElementById("sec-" + id)?.querySelectorAll(".body").forEach(b => {
+    const w = chartWidth(b);
+    if (w < 50) return;
+    if (b._pending) {
+      const p = b._pending;
+      drawChart(b, p.times, p.series, p.kind, p.unit);
+    } else if (b._uplot && b._uplot.width !== w) {
+      b._uplot.setSize({ width: w, height: 240 });
+    }
+  });
+}
+
 function activate(id, push) {
   if (!sections.some(s => s.dataset.section === id)) id = sections[0].dataset.section;
   sections.forEach(s => s.hidden = s.dataset.section !== id);
   // A chart drawn while another section was on screen may have been sized
   // against a different column width (scrollbar, zoom, window resize while
   // hidden). Re-measure now that this section is the visible one.
-  document.getElementById("sec-" + id)?.querySelectorAll(".body").forEach(b => {
-    if (b._uplot && b.clientWidth > 50) b._uplot.setSize({ width: b.clientWidth, height: 240 });
-  });
+  drawPending(id);
   document.querySelectorAll("[data-nav]").forEach(a =>
     a.classList.toggle("on", a.dataset.nav === id));
   const sel = document.getElementById("rail-select");
@@ -540,6 +568,12 @@ document.querySelectorAll("[data-range-for]").forEach(host => {
 });
 window.addEventListener("hashchange", () => {
   active = activate((location.hash || "").replace("#", ""), false);
+});
+
+let resizeTimer;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => drawPending(active), 150);
 });
 
 // Refresh only what is on screen.
