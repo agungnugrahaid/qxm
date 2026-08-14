@@ -170,6 +170,92 @@
     </p>
   </div>
 
+  <!-- Customer portal logins. Deliberately NOT Grafana accounts: a Grafana OSS
+       Viewer can query any datasource directly, so a customer login there would
+       expose every other customer. These sessions are locked to this customer
+       server-side. -->
+  <div class="card" style="margin-bottom: 1.5rem;" id="portal">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+      <h2 style="font-size: 1.25rem; margin: 0; display: flex; align-items: center;">
+        <i data-lucide="users" style="width:18px; height:18px; display:inline-block; vertical-align:middle; margin-right:0.25rem; color:var(--primary);"></i>
+        Customer Portal Logins
+      </h2>
+      <a class="btn" href="/portal?as={{ customer.id }}" target="_blank">
+        <i data-lucide="eye" style="width:14px; height:14px;"></i> View as customer
+      </a>
+    </div>
+
+    {% if request.query_params.get("ppw") %}
+      <div class="info-notification" style="margin-bottom: 1rem; border-left: 4px solid var(--primary);">
+        <strong>Password for {{ request.query_params.get("pnew") }}:</strong>
+        <code style="font-size: 1rem; letter-spacing: 0.05em;">{{ request.query_params.get("ppw") }}</code><br>
+        <span style="font-size: 0.85rem;">Shown once &mdash; copy it now. It is stored hashed and cannot be retrieved, only reset.</span>
+      </div>
+    {% elif request.query_params.get("perror") == "duplicate" %}
+      <div class="info-notification warning" style="margin-bottom: 1rem; border-left: 4px solid var(--terracotta); background: #fee2e2; color: var(--terracotta);">
+        <strong>That email already has a portal login.</strong> An address can belong to only one customer.
+      </div>
+    {% elif request.query_params.get("perror") == "email" %}
+      <div class="info-notification warning" style="margin-bottom: 1rem; border-left: 4px solid var(--terracotta); background: #fee2e2; color: var(--terracotta);">
+        <strong>Enter a valid email address.</strong>
+      </div>
+    {% endif %}
+
+    {% if portal_users %}
+    <table style="width:100%; border-collapse: collapse; margin-bottom: 1rem;">
+      <thead>
+        <tr style="text-align:left; color: var(--on-surface-variant); font-size: 0.75rem; text-transform: uppercase;">
+          <th style="padding:0.4rem;">Email</th>
+          <th style="padding:0.4rem;">Status</th>
+          <th style="padding:0.4rem;">Last login</th>
+          <th style="padding:0.4rem;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in portal_users %}
+        <tr style="border-top: 1px solid var(--outline-variant);">
+          <td style="padding:0.45rem;">{{ u.email }}</td>
+          <td style="padding:0.45rem;">
+            {% if u.is_active %}<span class="chip">active</span>{% else %}<span class="chip" style="background:#fee2e2; color:var(--terracotta);">disabled</span>{% endif %}
+          </td>
+          <td style="padding:0.45rem; color: var(--on-surface-variant); font-size: 0.85rem;">
+            {{ u.last_login_at.strftime("%d %b %Y %H:%M") if u.last_login_at else "never" }}
+          </td>
+          <td style="padding:0.45rem; text-align:right; white-space:nowrap;">
+            <form class="inline" method="post" action="/customers/{{ customer.id }}/portal-users/{{ u.id }}/reset" style="display:inline;">
+              <button class="btn" type="submit">Reset password</button>
+            </form>
+            <form class="inline" method="post" action="/customers/{{ customer.id }}/portal-users/{{ u.id }}/toggle" style="display:inline;">
+              <button class="btn" type="submit">{{ "Disable" if u.is_active else "Enable" }}</button>
+            </form>
+            <form class="inline" method="post" action="/customers/{{ customer.id }}/portal-users/{{ u.id }}/delete" style="display:inline;"
+                  onsubmit="return confirm('Delete the portal login for {{ u.email }}?');">
+              <button class="btn" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--on-surface-variant); font-size: 0.9rem;">
+      No portal logins yet. The customer cannot sign in until one is created.
+    </p>
+    {% endif %}
+
+    <form method="post" action="/customers/{{ customer.id }}/portal-users"
+          style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+      <input type="email" name="email" placeholder="contact@customer.example" required
+             style="height:36px; padding:0 0.5rem; font-size:0.875rem; min-width:260px;">
+      <button class="btn primary" type="submit">
+        <i data-lucide="user-plus" style="width:14px; height:14px;"></i> Create login
+      </button>
+      <span style="color: var(--on-surface-variant); font-size: 0.85rem;">
+        A password is generated and shown once.
+      </span>
+    </form>
+  </div>
+
   <!-- SLA & Tickets (manual entry until the ERP API exists) -->
   <div class="card" style="margin-bottom: 1.5rem;" id="sla">
     <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--outline-variant); padding-bottom: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">

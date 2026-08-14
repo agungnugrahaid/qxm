@@ -48,13 +48,13 @@ from datetime import datetime, timedelta, timezone
 
 import psycopg2
 import psycopg2.extras
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from dashboard_share import share_dashboard_for_customer, slugify
-from portal_auth import find_customer_user, touch_last_login, verify_password
+from portal_auth import find_customer_user, hash_password, touch_last_login, verify_password
 from deploy_lib import load_templates, push_to_router
 from report_lib import (
     WIB,
@@ -223,10 +223,16 @@ async def require_login(request: Request, call_next):
     return await call_next(request)
 
 
-def portal_customer_id(request: Request) -> int:
-    """The customer this request may see, taken from the signed session only.
-    Raises for an admin, who has no single customer -- admins preview the
-    portal via /portal/{id} (a separate admin-only route), not via this."""
+def portal_customer_id(request: Request, override=None) -> int:
+    """The customer this request may see.
+
+    For a customer session: always the id in the signed cookie -- `override`
+    is ignored, so ?as= / ?customer_id= cannot widen what they see.
+    For an admin session: `override` is honoured, which is how the NOC previews
+    a customer's portal ("view as") without needing that customer's password.
+    """
+    if getattr(request.state, "session_role", None) == ROLE_ADMIN and override is not None:
+        return int(override)
     cid = getattr(request.state, "session_customer_id", None)
     if cid is None:
         raise PermissionError("no customer bound to this session")
@@ -386,11 +392,13 @@ def portal_panel_list(customer_id, start, end):
 
 
 @app.get("/portal")
-def portal_home(request: Request, range: str = PORTAL_RANGE_DEFAULT):
-    if getattr(request.state, "session_role", None) == ROLE_ADMIN:
+def portal_home(request: Request, range: str = PORTAL_RANGE_DEFAULT,
+                as_: int = Query(None, alias="as")):
+    is_admin = getattr(request.state, "session_role", None) == ROLE_ADMIN
+    if is_admin and as_ is None:
         # Admins have no single customer -- send them to the Console.
         return RedirectResponse("/customers", status_code=303)
-    customer_id = portal_customer_id(request)
+    customer_id = portal_customer_id(request, as_)
     rng, start, end = _portal_window(range)
 
     conn = get_conn()
@@ -408,13 +416,17 @@ def portal_home(request: Request, range: str = PORTAL_RANGE_DEFAULT):
          "panels": portal_panel_list(customer_id, start, end),
          "ranges": list(PORTAL_RANGES.keys()),
          "range": rng,
+         # Only ever set for an admin preview; a customer session gets "" and
+         # the value is ignored server-side even if they add it by hand.
+         "preview_as": as_ if is_admin else None,
          "user": request.state.session_user},
     )
 
 
 @app.get("/portal/api/kpis")
-def portal_api_kpis(request: Request, range: str = PORTAL_RANGE_DEFAULT):
-    customer_id = portal_customer_id(request)
+def portal_api_kpis(request: Request, range: str = PORTAL_RANGE_DEFAULT,
+                    as_: int = Query(None, alias="as")):
+    customer_id = portal_customer_id(request, as_)
     _, start, end = _portal_window(range)
     try:
         kpis = collect_kpis(customer_id, start, end)
@@ -424,11 +436,12 @@ def portal_api_kpis(request: Request, range: str = PORTAL_RANGE_DEFAULT):
 
 
 @app.get("/portal/api/series")
-def portal_api_series(request: Request, panel: str, range: str = PORTAL_RANGE_DEFAULT):
-    """One panel's data as JSON. customer_id comes from the session, so `panel`
-    is the only client input -- and a path:<id> router is re-checked against
-    this customer before it is queried."""
-    customer_id = portal_customer_id(request)
+def portal_api_series(request: Request, panel: str, range: str = PORTAL_RANGE_DEFAULT,
+                      as_: int = Query(None, alias="as")):
+    """One panel's data as JSON. customer_id comes from the session (or, for an
+    admin preview only, ?as=), so `panel` is the only client input -- and a
+    path:<id> router is re-checked against that customer before it is queried."""
+    customer_id = portal_customer_id(request, as_)
     _, start, end = _portal_window(range)
     out = {"panel": panel, "times": [], "series": {}}
 
@@ -486,6 +499,103 @@ def portal_api_series(request: Request, panel: str, range: str = PORTAL_RANGE_DE
         return JSONResponse({"panel": panel, "error": str(e)[:200]}, status_code=200)
 
     return JSONResponse(out)
+
+
+# --- Portal user management (admin side) -------------------------------------
+# Passwords are generated here, never chosen by the operator, and shown exactly
+# once -- there is no "view password" anywhere, only reset.
+
+def _new_portal_password() -> str:
+    """Readable but strong: 4 groups of 4 from an unambiguous alphabet, so it
+    survives being read down a phone line to a hotel's IT contact."""
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no I/O/0/1
+    return "-".join("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(4))
+
+
+def _portal_users(conn, customer_id):
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT id, email, is_active, created_at, last_login_at
+           FROM customer_users WHERE customer_id = %s ORDER BY lower(email)""",
+        (customer_id,),
+    )
+    return cur.fetchall()
+
+
+@app.post("/customers/{customer_id}/portal-users")
+def portal_user_create(request: Request, customer_id: int, email: str = Form("")):
+    if getattr(request.state, "session_role", None) != ROLE_ADMIN:
+        return RedirectResponse("/portal", status_code=303)
+    email = (email or "").strip()
+    if not email or "@" not in email:
+        return RedirectResponse(f"/customers/{customer_id}?perror=email", status_code=303)
+    password = _new_portal_password()
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO customer_users (customer_id, email, password_hash) VALUES (%s,%s,%s)",
+            (customer_id, email, hash_password(password)),
+        )
+        conn.commit()
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback(); conn.close()
+        # The unique index is global (lower(email)) -- an address can only ever
+        # belong to one customer, so say so rather than a generic failure.
+        return RedirectResponse(f"/customers/{customer_id}?perror=duplicate", status_code=303)
+    conn.close()
+    # Password travels once, in the redirect, and is shown once.
+    return RedirectResponse(
+        f"/customers/{customer_id}?pnew={urllib.parse.quote(email)}&ppw={urllib.parse.quote(password)}",
+        status_code=303,
+    )
+
+
+@app.post("/customers/{customer_id}/portal-users/{user_id}/reset")
+def portal_user_reset(request: Request, customer_id: int, user_id: int):
+    if getattr(request.state, "session_role", None) != ROLE_ADMIN:
+        return RedirectResponse("/portal", status_code=303)
+    password = _new_portal_password()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE customer_users SET password_hash = %s WHERE id = %s AND customer_id = %s RETURNING email",
+        (hash_password(password), user_id, customer_id),
+    )
+    row = cur.fetchone()
+    conn.commit(); conn.close()
+    if not row:
+        return RedirectResponse(f"/customers/{customer_id}", status_code=303)
+    return RedirectResponse(
+        f"/customers/{customer_id}?pnew={urllib.parse.quote(row['email'])}&ppw={urllib.parse.quote(password)}",
+        status_code=303,
+    )
+
+
+@app.post("/customers/{customer_id}/portal-users/{user_id}/toggle")
+def portal_user_toggle(request: Request, customer_id: int, user_id: int):
+    if getattr(request.state, "session_role", None) != ROLE_ADMIN:
+        return RedirectResponse("/portal", status_code=303)
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE customer_users SET is_active = NOT is_active WHERE id = %s AND customer_id = %s",
+        (user_id, customer_id),
+    )
+    conn.commit(); conn.close()
+    return RedirectResponse(f"/customers/{customer_id}", status_code=303)
+
+
+@app.post("/customers/{customer_id}/portal-users/{user_id}/delete")
+def portal_user_delete(request: Request, customer_id: int, user_id: int):
+    if getattr(request.state, "session_role", None) != ROLE_ADMIN:
+        return RedirectResponse("/portal", status_code=303)
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM customer_users WHERE id = %s AND customer_id = %s",
+                (user_id, customer_id))
+    conn.commit(); conn.close()
+    return RedirectResponse(f"/customers/{customer_id}", status_code=303)
 
 
 @app.get("/portal/report")
@@ -1263,6 +1373,8 @@ def show_customer_detail(request: Request, customer_id: int):
     )
     topology_files = cur.fetchall()
 
+    portal_users = _portal_users(conn, customer_id)
+
     conn.close()
 
     return templates.TemplateResponse(
@@ -1270,6 +1382,7 @@ def show_customer_detail(request: Request, customer_id: int):
         {
             "request": request,
             "customer": customer,
+            "portal_users": portal_users,
             "routers": routers,
             "sites": sites,
             "unassigned_sites": unassigned_sites,

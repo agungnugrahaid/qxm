@@ -80,15 +80,29 @@
     <div class="toolbar">
       <span class="range">
         {% for r in ranges %}
-        <a href="/portal?range={{ r }}" class="{{ 'on' if r == range else '' }}">{{ r }}</a>
+        <a href="/portal?range={{ r }}{% if preview_as %}&as={{ preview_as }}{% endif %}"
+           class="{{ 'on' if r == range else '' }}">{{ r }}</a>
         {% endfor %}
       </span>
       <a class="btn" href="/portal/report?days=30">PDF report</a>
+      {% if preview_as %}
+      <a class="btn" href="/customers/{{ preview_as }}">Back to Console</a>
+      {% else %}
       <form method="post" action="/logout" style="margin:0;">
         <button class="btn" type="submit">Sign out</button>
       </form>
+      {% endif %}
     </div>
   </div>
+
+  {% if preview_as %}
+  <div style="background:#fff6e0; border:1px solid #f0c674; border-radius:6px;
+              padding:0.6rem 0.9rem; margin-bottom:1rem; font-size:0.82rem; color:#8a5a06;">
+    <b>Preview</b> — you are viewing this customer's portal as an operator.
+    The customer sees exactly this page, without this banner and without the
+    Console link.
+  </div>
+  {% endif %}
 
   <div class="kpi-row" id="kpis"></div>
 
@@ -110,6 +124,10 @@
 
 <script>
 const RANGE = {{ range|tojson }};
+// Admin "view as" preview only -- a customer session gets "" here, and the
+// server ignores ?as= for customer sessions regardless of what is sent.
+const AS = {{ (preview_as or "")|tojson }};
+const asQ = AS === "" ? "" : "&as=" + encodeURIComponent(AS);
 // Grafana's categorical order, so a customer moving between the two sees the
 // same colour for the same series.
 const COLORS = ["#1e4b8f","#00a3a3","#e0752d","#7b4fbd","#c2334d","#3d8b40","#b08800","#0d7fa6"];
@@ -223,7 +241,7 @@ async function loadPanel(el) {
   const id = el.dataset.panel, kind = el.dataset.kind;
   const body = el.querySelector(".body");
   try {
-    const r = await fetch(`/portal/api/series?panel=${encodeURIComponent(id)}&range=${RANGE}`);
+    const r = await fetch(`/portal/api/series?panel=${encodeURIComponent(id)}&range=${RANGE}${asQ}`);
     const d = await r.json();
     if (d.error) { body.innerHTML = `<div class="state">Unavailable right now.</div>`; return; }
     if (kind === "table") drawTable(body, d.rows);
@@ -236,7 +254,7 @@ async function loadPanel(el) {
 
 async function loadKpis() {
   try {
-    const r = await fetch(`/portal/api/kpis?range=${RANGE}`);
+    const r = await fetch(`/portal/api/kpis?range=${RANGE}${asQ}`);
     const d = await r.json();
     document.getElementById("kpis").innerHTML = (d.kpis || []).map(k =>
       `<div class="kpi-box"><div class="v">${k.value}</div>` +
