@@ -534,6 +534,71 @@ def portal_abuse(customer_id, start, end):
              "syn_ratio": r["syn_ratio"]} for r in rows]
 
 
+INCIDENT_LABELS = {
+    "router_unreachable": ("Router unreachable", "Router tidak terjangkau"),
+    "internet_down": ("Internet connection down", "Koneksi internet terputus"),
+    "degraded": ("Degraded performance", "Kinerja menurun"),
+    "uplink_down": ("Uplink down", "Uplink terputus"),
+    "aps_offline": ("Access points offline", "Access point mati"),
+    "dhcp_full": ("DHCP pool full", "Alokasi DHCP penuh"),
+    "conntrack_full": ("Connection table full", "Tabel koneksi penuh"),
+}
+
+
+def portal_incidents(customer_id, start, end):
+    """Measured outages for the period, plus availability derived from them.
+
+    monitoring_gap rows are excluded from BOTH the list and the availability
+    figure: those are windows where we stopped receiving data from most of the
+    fleet at once, i.e. our own outage, and charging a customer's availability
+    for our collector freezing would be plainly wrong. The panel says so rather
+    than silently dropping the time.
+    """
+    rows = _pg_rows(
+        """
+        SELECT i.id, i.kind, i.severity, i.started_at, i.ended_at, i.detail,
+               i.monitoring_gap, r.identity_name AS router
+        FROM incidents i LEFT JOIN routers r ON r.id = i.router_id
+        WHERE i.customer_id = %s
+          AND i.started_at < %s
+          AND (i.ended_at IS NULL OR i.ended_at > %s)
+        ORDER BY i.started_at DESC
+        """,
+        (customer_id, end, start),
+    )
+
+    window = max((end - start).total_seconds(), 1)
+    counted, excluded, out = 0.0, 0.0, []
+    for r in rows:
+        # clip to the selected window so a long incident spanning the edge
+        # contributes only the part inside it
+        s = max(r["started_at"], start)
+        e = min(r["ended_at"] or end, end)
+        secs = max((e - s).total_seconds(), 0)
+        if r["monitoring_gap"]:
+            excluded += secs
+            continue
+        counted += secs
+        en, idn = INCIDENT_LABELS.get(r["kind"], (r["kind"], r["kind"]))
+        out.append({
+            "kind": r["kind"], "label_en": en, "label_id": idn,
+            "severity": r["severity"], "router": r["router"],
+            "started_at": r["started_at"], "ended_at": r["ended_at"],
+            "ongoing": r["ended_at"] is None,
+            "minutes": round(secs / 60, 1),
+            "detail": r["detail"] or {},
+        })
+
+    availability = 100.0 * (1 - min(counted, window) / window)
+    return {
+        "incidents": out,
+        "open_count": sum(1 for i in out if i["ongoing"]),
+        "availability": round(availability, 3),
+        "downtime_minutes": round(counted / 60, 1),
+        "excluded_minutes": round(excluded / 60, 1),
+    }
+
+
 def portal_environment(customer_id):
     """Latest hardware gauges per router: temperature, fans, PSU state, voltage,
     power draw. health_metrics stores value as TEXT because the gauges are a
@@ -671,6 +736,15 @@ def portal_panel_list(customer_id, start, end):
     """Panel descriptors for the portal, mirroring the customer dashboard's
     layout. Cheap -- no series data, just what exists for this customer."""
     panels = [
+        {"id": "incidents", "section": "overview", "kind": "incidents",
+         "title_en": "Service Incidents",
+         "title_id": "Gangguan Layanan",
+         "note_en": "Measured from our monitoring -- this is not the contractual SLA, "
+                    "which is on the Service page. Periods where our own monitoring was "
+                    "unavailable are excluded rather than counted against you.",
+         "note_id": "Diukur dari pemantauan kami -- ini bukan SLA kontraktual, yang ada di "
+                    "halaman Layanan. Periode saat pemantauan kami tidak tersedia "
+                    "dikecualikan, bukan dihitung sebagai gangguan."},
         {"id": "traffic", "section": "internet", "kind": "area",
          "title_en": "Internet Traffic", "title_id": "Trafik Internet", "unit": "bps"},
     ]
@@ -987,6 +1061,8 @@ def portal_api_series(request: Request, panel: str, range: str = PORTAL_RANGE_DE
             times, series = portal_conntrack(customer_id, start, end)
             out["times"] = _epochs(times)
             out["series"] = {k: [_num(x) for x in v] for k, v in series.items()}
+        elif panel == "incidents":
+            out.update(portal_incidents(customer_id, start, end))
         elif panel == "cores":
             times, series = portal_cores(customer_id, start, end)
             out["times"] = _epochs(times)

@@ -553,6 +553,67 @@ function drawAbuse(body, d) {
   body.innerHTML = h + "</tbody></table></div>";
 }
 
+// Service incidents. The headline is the status right now, because that is
+// what someone opening this page during a complaint needs first; the history
+// is underneath.
+function drawIncidents(body, d) {
+  const list = d.incidents || [];
+  const open = d.open_count || 0;
+  const av = d.availability;
+
+  const banner = open
+    ? `<div style="background:#ffdad6;border:1px solid #f5b5ae;color:#93000a;
+         border-radius:6px;padding:0.7rem 0.9rem;margin-bottom:0.9rem;">
+         <b>Service issue in progress</b> — ${open} ongoing.<br>
+         <span style="font-size:0.8rem;">Gangguan sedang berlangsung — ${open} berjalan.</span>
+       </div>`
+    : `<div style="background:#e6f4ea;border:1px solid #b7e0c4;color:#1e6b34;
+         border-radius:6px;padding:0.7rem 0.9rem;margin-bottom:0.9rem;">
+         <b>No incidents in progress</b><br>
+         <span style="font-size:0.8rem;">Tidak ada gangguan yang sedang berlangsung.</span>
+       </div>`;
+
+  const tiles =
+    `<div class="kpi-row" style="margin-bottom:0.9rem;">
+       <div class="kpi-box"><div class="v">${av == null ? "–" : av.toFixed(3) + "%"}</div>
+         <div class="l">Measured availability<br><span style="color:#a3a7b2;">Ketersediaan terukur</span></div></div>
+       <div class="kpi-box"><div class="v">${list.length}</div>
+         <div class="l">Incidents this period<br><span style="color:#a3a7b2;">Gangguan periode ini</span></div></div>
+       <div class="kpi-box"><div class="v">${d.downtime_minutes ?? 0} min</div>
+         <div class="l">Total downtime<br><span style="color:#a3a7b2;">Total waktu gangguan</span></div></div>
+     </div>`;
+
+  let h = banner + tiles;
+
+  if (!list.length) {
+    h += '<div class="state">No incidents recorded in this period.<br>' +
+         'Tidak ada gangguan tercatat pada periode ini.</div>';
+  } else {
+    h += '<div class="tscroll"><table class="ptable"><thead><tr><th>Started</th>' +
+         '<th>Duration</th><th>What happened</th><th>Affected</th></tr></thead><tbody>';
+    for (const i of list) {
+      const when = new Date(i.started_at).toLocaleString();
+      const dur = i.ongoing
+        ? '<span class="chip" style="background:#ffdad6;color:#93000a;">ongoing</span>'
+        : (i.minutes >= 60 ? (i.minutes / 60).toFixed(1) + " h" : i.minutes + " min");
+      h += `<tr${i.ongoing ? ' style="background:#fff5f5;"' : ""}>` +
+           `<td>${esc(when)}</td><td>${dur}</td>` +
+           `<td>${esc(i.label_en)}<br><span style="color:#a3a7b2;font-size:0.75rem;">${esc(i.label_id)}</span></td>` +
+           `<td>${esc(i.router || "–")}</td></tr>`;
+    }
+    h += "</tbody></table></div>";
+  }
+
+  if (d.excluded_minutes) {
+    h += `<p class="note">${d.excluded_minutes} min excluded: our monitoring was
+          unavailable and that time is not counted against you.<br>
+          <span style="color:#a3a7b2;">${d.excluded_minutes} menit dikecualikan:
+          pemantauan kami tidak tersedia dan waktu tersebut tidak dihitung
+          sebagai gangguan.</span></p>`;
+  }
+  body.innerHTML = h;
+}
+
 function drawEnvironment(body, d) {
   const rows = d.rows || [];
   if (!rows.length) { body.innerHTML = '<div class="state">No hardware sensors reporting.</div>'; return; }
@@ -643,6 +704,7 @@ async function loadPanel(el, range) {
     else if (kind === "environment") drawEnvironment(body, d);
     else if (kind === "bands") drawBands(body, d);
     else if (kind === "inventory") drawInventory(body, d);
+    else if (kind === "incidents") drawIncidents(body, d);
     else drawChart(body, d.times, d.series, kind, (el.dataset.unit || ""));
   } catch (e) {
     body.innerHTML = `<div class="state">Unavailable right now.</div>`;
