@@ -25,6 +25,12 @@
   <link rel="stylesheet" href="/static/uPlot.min.css">
   <script src="/static/uPlot.iife.min.js"></script>
   <style>
+    /* Always reserve the vertical scrollbar. Sections differ in height, so
+       without this the bar appears on a tall section and vanishes on a short
+       one, changing the content width by ~15px each time. Charts freeze their
+       width in pixels at draw time, so that shift is permanent for whichever
+       section was drawn on the wrong side of it. */
+    html { overflow-y: scroll; scrollbar-gutter: stable; }
     body { background: #f6f8fc; }
     .portal-wrap { max-width: 1180px; margin: 0 auto; padding: 1.2rem 1rem 3rem; }
     .portal-bar {
@@ -97,6 +103,11 @@
     /* Wide tables scroll inside their own panel rather than widening the
        column -- the other half of keeping section widths identical. */
     .panel .body { overflow-x: auto; }
+    /* uPlot's legend is a table with one column per series; the per-router
+       path chart has 12, so it is far wider than the plot. Let it wrap
+       instead of dictating the panel's width. */
+    .u-legend { max-width: 100%; }
+    .u-legend .u-series { display: inline-block; }
     .u-tooltip {
       position: absolute; pointer-events: none; z-index: 100; background: #131c28;
       color: #fff; font-size: 0.72rem; padding: 0.4rem 0.55rem; border-radius: 5px;
@@ -269,10 +280,18 @@ function drawChart(host, times, series, kind, unit) {
     host.innerHTML = '<div class="state">No data for this period.<br>Belum ada data untuk periode ini.</div>';
     return;
   }
+  // Drawing into a host with no width yet would bake in a wrong size.
+  if (host.clientWidth < 50) {
+    requestAnimationFrame(() => drawChart(host, times, series, kind, unit));
+    return;
+  }
   const fmt = unit === "bps" ? fmtBps : fmtNum;
   const data = [times, ...names.map(n => series[n])];
   const opts = {
-    width: host.clientWidth || 900,
+    // No fallback width: a guess here (it used to be 900) sticks permanently,
+    // because uPlot stores the canvas size in pixels. If the host has no width
+    // yet the caller retries on the next frame.
+    width: host.clientWidth,
     height: 240,
     cursor: { drag: { x: true, y: false } },   // drag-to-zoom, like the dashboard
     legend: { live: false },
@@ -300,6 +319,7 @@ function drawChart(host, times, series, kind, unit) {
     plugins: [tooltipPlugin(fmt)],
   };
   const u = new uPlot(opts, data, host);
+  host._uplot = u;   // re-measured on section activation
   // Keep the chart the width of its panel on resize/rotate. Hiding a section
   // collapses clientWidth to 0 and the observer fires -- resizing a uPlot to
   // width 0 wrecks it, and it does not recover when the section comes back.
@@ -487,6 +507,12 @@ async function loadSection(id, force) {
 function activate(id, push) {
   if (!sections.some(s => s.dataset.section === id)) id = sections[0].dataset.section;
   sections.forEach(s => s.hidden = s.dataset.section !== id);
+  // A chart drawn while another section was on screen may have been sized
+  // against a different column width (scrollbar, zoom, window resize while
+  // hidden). Re-measure now that this section is the visible one.
+  document.getElementById("sec-" + id)?.querySelectorAll(".body").forEach(b => {
+    if (b._uplot && b.clientWidth > 50) b._uplot.setSize({ width: b.clientWidth, height: 240 });
+  });
   document.querySelectorAll("[data-nav]").forEach(a =>
     a.classList.toggle("on", a.dataset.nav === id));
   const sel = document.getElementById("rail-select");
