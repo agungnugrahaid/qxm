@@ -542,6 +542,7 @@ INCIDENT_LABELS = {
     "aps_offline": ("Access points offline", "Access point mati"),
     "dhcp_full": ("DHCP pool full", "Alokasi DHCP penuh"),
     "conntrack_full": ("Connection table full", "Tabel koneksi penuh"),
+    "abuse": ("Unusually active device", "Perangkat dengan aktivitas tidak wajar"),
 }
 
 
@@ -578,7 +579,11 @@ def portal_incidents(customer_id, start, end):
         if r["monitoring_gap"]:
             excluded += secs
             continue
-        counted += secs
+        # Only a genuine outage counts against availability. A failed-over
+        # uplink, a full DHCP pool or a noisy device is degraded/advisory --
+        # real, worth showing, but the service was still up.
+        if r["severity"] == "outage":
+            counted += secs
         en, idn = INCIDENT_LABELS.get(r["kind"], (r["kind"], r["kind"]))
         out.append({
             "kind": r["kind"], "label_en": en, "label_id": idn,
@@ -588,6 +593,37 @@ def portal_incidents(customer_id, start, end):
             "minutes": round(secs / 60, 1),
             "detail": r["detail"] or {},
         })
+
+    # Abuse events are merged at READ time rather than copied into `incidents`:
+    # flow-sync already maintains them with first_seen/last_seen, and duplicating
+    # would mean keeping two tables in step. They are advisory -- a device
+    # misbehaving is not the service being down -- so they never affect
+    # availability.
+    for a in _pg_rows(
+        """
+        SELECT e.internal_ip, e.first_seen, e.last_seen, e.peak_conn_rate,
+               r.identity_name AS router
+        FROM flow_abuse_events e LEFT JOIN routers r ON r.id = e.router_id
+        WHERE e.customer_id = %s AND e.first_seen < %s AND e.last_seen > %s
+        -- Only the worst few. These are advisory and there can be dozens; the
+        -- timeline exists to surface outages, and 20 advisory rows bury them.
+        -- The full list lives in the Traffic Insights panel.
+        ORDER BY e.peak_conn_rate DESC LIMIT 5
+        """,
+        (customer_id, end, start),
+    ):
+        out.append({
+            "kind": "abuse", "label_en": "Unusually active device",
+            "label_id": "Perangkat dengan aktivitas tidak wajar",
+            "severity": "advisory", "router": a["router"],
+            "started_at": a["first_seen"], "ended_at": a["last_seen"],
+            "ongoing": False,
+            "minutes": round(max((min(a["last_seen"], end) - max(a["first_seen"], start))
+                                 .total_seconds(), 0) / 60, 1),
+            "detail": {"ip": a["internal_ip"],
+                       "peak_conn_rate": round(a["peak_conn_rate"] or 0)},
+        })
+    out.sort(key=lambda i: i["started_at"], reverse=True)
 
     availability = 100.0 * (1 - min(counted, window) / window)
     return {

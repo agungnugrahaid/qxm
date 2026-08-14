@@ -1,11 +1,16 @@
 """detector.py -- derives service incidents into the `incidents` table.
 
-Phase A: the two kinds that mean "down".
+  router_unreachable  the router stopped pushing metrics          (outage)
+  internet_down       router up, but ALL ping targets failing      (outage)
+  uplink_down         a WAN interface not running                  (degraded)
+  aps_offline         APs offline above the site's own baseline    (degraded)
+  dhcp_full           a pool at its ceiling                        (degraded)
+  conntrack_full      connection table at its ceiling              (degraded)
 
-  router_unreachable  the router stopped pushing metrics
-  internet_down       the router is up but ALL ping targets are failing
+Only `outage` counts against availability: a failed-over uplink or a full DHCP
+pool is real and worth showing, but the service was still up.
 
-Both are deliberately conservative. A customer told they were down when they
+All of it is deliberately conservative. A customer told they were down when they
 were not will never trust the panel again, so every threshold errs toward
 missing a short blip rather than inventing one.
 
@@ -49,6 +54,11 @@ MIN_LOSS_BUCKETS = int(os.environ.get("INCIDENT_MIN_LOSS_BUCKETS", "2"))
 # the wrong side of the boundary.
 GAP_RATIO = float(os.environ.get("INCIDENT_GAP_RATIO", "0.6"))
 INTERVAL = int(os.environ.get("INCIDENT_INTERVAL_SECONDS", "300"))
+# APs offline ABOVE the site's own 24h median. A fixed threshold would open a
+# permanent incident on an estate that runs ~98 APs offline as its normal state.
+APS_OFFLINE_DELTA = int(os.environ.get("INCIDENT_APS_OFFLINE_DELTA", "3"))
+DHCP_FULL_PCT = float(os.environ.get("INCIDENT_DHCP_FULL_PCT", "99"))
+CONNTRACK_FULL_PCT = float(os.environ.get("INCIDENT_CONNTRACK_FULL_PCT", "95"))
 
 
 def get_conn():
@@ -183,6 +193,173 @@ def _loss_incident(run, ended, now, gaps):
     }
 
 
+def _runs(buckets, key, min_len, now, gaps, build):
+    """Collapse consecutive flagged buckets into incidents.
+
+    `buckets` is ordered; `key(b)` says whether the condition holds. A run of at
+    least `min_len` becomes one incident via `build(run, ended)`.
+    """
+    found, run = [], []
+    for b in buckets:
+        if key(b):
+            run.append(b)
+            continue
+        if len(run) >= min_len:
+            found.append(build(run, b["b"]))
+        run = []
+    if len(run) >= min_len:
+        found.append(build(run, None))
+    return found
+
+
+def detect_uplink_down(conn, now, since, gaps):
+    """A WAN interface reporting not-running. On a multi-WAN customer this is
+    degraded rather than an outage -- the point is that the customer can SEE the
+    backup carried them, which is invisible today. If the last WAN also fails,
+    internet_down covers it."""
+    uplinks = {(r["router_id"], r["interface_name"]) for r in q(conn, """
+        SELECT DISTINCT r.id AS router_id, u.interface_name
+          FROM uplink_metrics u JOIN routers r ON r.id = u.router_id
+         WHERE u.time >= %s AND u.interface_name IS NOT NULL
+        UNION SELECT id, wan_interface FROM routers WHERE wan_interface IS NOT NULL
+        UNION SELECT id, wan_interface_backup FROM routers WHERE wan_interface_backup IS NOT NULL
+    """, (since,))}
+    if not uplinks:
+        return []
+
+    rows = q(conn, """
+        SELECT r.id AS router_id, r.customer_id, r.identity_name,
+               im.interface_name, time_bucket('5 minutes', im.time) AS b,
+               bool_and(NOT im.running AND NOT im.disabled) AS down
+        FROM interface_metrics im JOIN routers r ON r.id = im.router_id
+        WHERE im.time >= %s AND r.customer_id IS NOT NULL
+        GROUP BY 1,2,3,4,5 ORDER BY 1,4,5
+    """, (since,))
+
+    found = []
+    by_iface = {}
+    for r in rows:
+        if (r["router_id"], r["interface_name"]) in uplinks:
+            by_iface.setdefault((r["router_id"], r["interface_name"]), []).append(r)
+    for (_, iface), buckets in by_iface.items():
+        def build(run, ended, iface=iface):
+            f = run[0]
+            return {"customer_id": f["customer_id"], "router_id": f["router_id"],
+                    "kind": "uplink_down", "severity": "degraded",
+                    "started_at": f["b"], "ended_at": ended,
+                    "detail": {"router": f["identity_name"], "interface": iface},
+                    "monitoring_gap": in_gap(gaps, f["b"], ended or now)}
+        found += _runs(buckets, lambda b: b["down"], MIN_LOSS_BUCKETS, now, gaps, build)
+    return found
+
+
+def detect_aps_offline(conn, now, since, gaps):
+    """APs newly offline at a site, measured against that site's own 24h median.
+
+    A fixed threshold is wrong here: one estate runs ~98 APs permanently
+    offline, which would open an incident that never closes and drown the real
+    ones. Comparing to the site's own baseline detects a NEW failure instead of
+    a chronic state.
+    """
+    rows = q(conn, """
+        WITH per_bucket AS (
+          SELECT s.customer_id, s.id AS site_id,
+                 COALESCE(NULLIF(s.site_desc,''), s.unifi_site_name) AS site,
+                 time_bucket('5 minutes', a.time) AS b,
+                 count(*) FILTER (WHERE a.state IS DISTINCT FROM 1) AS offline,
+                 count(*) AS total
+          FROM ap_inventory a JOIN sites s ON s.id = a.site_id
+          WHERE a.time >= %s AND s.customer_id IS NOT NULL
+          GROUP BY 1,2,3,4
+        ),
+        -- percentile_cont is an ordered-set aggregate and cannot be used as a
+        -- window function, so the per-site baseline is its own CTE.
+        base AS (
+          SELECT site_id, percentile_cont(0.5) WITHIN GROUP (ORDER BY offline) AS baseline
+          FROM per_bucket GROUP BY site_id
+        )
+        SELECT p.*, b.baseline FROM per_bucket p
+        JOIN base b ON b.site_id = p.site_id
+        ORDER BY p.site_id, p.b
+    """, (since,))
+    by_site = {}
+    for r in rows:
+        by_site.setdefault(r["site_id"], []).append(r)
+
+    found = []
+    for site_id, buckets in by_site.items():
+        def build(run, ended):
+            f = run[0]
+            peak = max(b["offline"] for b in run)
+            return {"customer_id": f["customer_id"], "router_id": None,
+                    "kind": "aps_offline", "severity": "degraded",
+                    "started_at": f["b"], "ended_at": ended,
+                    "detail": {"site": f["site"], "ap_count": int(peak), "site_total": int(f["total"] or 0),
+                               "baseline": int(f["baseline"] or 0)},
+                    "monitoring_gap": in_gap(gaps, f["b"], ended or now)}
+        found += _runs(
+            buckets,
+            # Scale the trigger with estate size: +3 offline is a crisis on a
+            # 6-AP site and noise on a 322-AP one.
+            lambda b: b["offline"] >= (b["baseline"] or 0) + max(
+                APS_OFFLINE_DELTA, round(0.05 * (b["total"] or 0))),
+            MIN_LOSS_BUCKETS, now, gaps, build)
+    return found
+
+
+def detect_capacity(conn, now, since, gaps):
+    """DHCP pools and the connection table hitting their ceiling. Neither takes
+    the link down, but both stop NEW connections -- which reaches the customer
+    as "the wifi stopped working" for anyone arriving."""
+    found = []
+
+    dhcp = q(conn, """
+        SELECT r.customer_id, r.id AS router_id, r.identity_name, d.pool_name,
+               time_bucket('5 minutes', d.time) AS b, max(d.utilization_pct) AS pct
+        FROM dhcp_pool_metrics d JOIN routers r ON r.id = d.router_id
+        WHERE d.time >= %s AND r.customer_id IS NOT NULL
+        GROUP BY 1,2,3,4,5 ORDER BY 2,4,5
+    """, (since,))
+    by_pool = {}
+    for r in dhcp:
+        by_pool.setdefault((r["router_id"], r["pool_name"]), []).append(r)
+    for (_, pool), buckets in by_pool.items():
+        def build(run, ended, pool=pool):
+            f = run[0]
+            return {"customer_id": f["customer_id"], "router_id": f["router_id"],
+                    "kind": "dhcp_full", "severity": "degraded",
+                    "started_at": f["b"], "ended_at": ended,
+                    "detail": {"router": f["identity_name"], "pool": pool,
+                               "peak_pct": float(max(b["pct"] or 0 for b in run))},
+                    "monitoring_gap": in_gap(gaps, f["b"], ended or now)}
+        found += _runs(buckets, lambda b: (b["pct"] or 0) >= DHCP_FULL_PCT,
+                       MIN_LOSS_BUCKETS, now, gaps, build)
+
+    ct = q(conn, """
+        SELECT r.customer_id, r.id AS router_id, r.identity_name,
+               time_bucket('5 minutes', m.time) AS b,
+               max(100.0 * m.conntrack_count / NULLIF(m.conntrack_max, 0)) AS pct
+        FROM router_metrics m JOIN routers r ON r.id = m.router_id
+        WHERE m.time >= %s AND r.customer_id IS NOT NULL AND m.conntrack_max > 0
+        GROUP BY 1,2,3,4 ORDER BY 2,4
+    """, (since,))
+    by_router = {}
+    for r in ct:
+        by_router.setdefault(r["router_id"], []).append(r)
+    for buckets in by_router.values():
+        def build(run, ended):
+            f = run[0]
+            return {"customer_id": f["customer_id"], "router_id": f["router_id"],
+                    "kind": "conntrack_full", "severity": "degraded",
+                    "started_at": f["b"], "ended_at": ended,
+                    "detail": {"router": f["identity_name"],
+                               "peak_pct": round(float(max(b["pct"] or 0 for b in run)), 1)},
+                    "monitoring_gap": in_gap(gaps, f["b"], ended or now)}
+        found += _runs(buckets, lambda b: (b["pct"] or 0) >= CONNTRACK_FULL_PCT,
+                       MIN_LOSS_BUCKETS, now, gaps, build)
+    return found
+
+
 # --- persistence -------------------------------------------------------------
 
 def upsert(conn, inc):
@@ -207,7 +384,10 @@ def run_once(conn):
     since = now - LOOKBACK
     gaps = monitoring_gap_buckets(conn, since)
     found = (detect_router_unreachable(conn, now, since, gaps)
-             + detect_internet_down(conn, now, since, gaps))
+             + detect_internet_down(conn, now, since, gaps)
+             + detect_uplink_down(conn, now, since, gaps)
+             + detect_aps_offline(conn, now, since, gaps)
+             + detect_capacity(conn, now, since, gaps))
     new = sum(1 for inc in found if upsert(conn, inc))
     conn.commit()
     open_now = q(conn, "SELECT count(*) AS n FROM incidents WHERE ended_at IS NULL")[0]["n"]
