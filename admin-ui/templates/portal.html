@@ -66,6 +66,7 @@
                  text-transform: uppercase; letter-spacing: 0.04em; padding: 0.3rem 0.4rem; }
     .ptable td { padding: 0.32rem 0.4rem; border-top: 1px solid #eef2fa; }
     .ptable td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .ptable td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; }
     .bar { height: 8px; background: #1e4b8f; border-radius: 3px; }
     .updated { font-size: 0.72rem; color: #a3a7b2; }
     /* Rail on the left, content on the right. */
@@ -465,6 +466,75 @@ function drawSla(body, d) {
   body.innerHTML = h;
 }
 
+// Interface problems. Deliberately shows only what is wrong -- a list of
+// healthy interfaces would bury the one that is not.
+function drawIfErrors(body, d) {
+  const rows = d.rows || [];
+  if (!rows.length) {
+    body.innerHTML = '<div class="state">No interface problems detected.<br>' +
+                     'Tidak ada masalah antarmuka.</div>';
+    return;
+  }
+  let h = '<div class="tscroll"><table class="ptable"><thead><tr><th>Router</th>' +
+          '<th>Interface</th><th>State</th><th style="text-align:right;">Errors</th>' +
+          '<th>Detail</th></tr></thead><tbody>';
+  for (const r of rows) {
+    const bad = r.state === "down";
+    const chip = bad
+      ? '<span class="chip" style="background:#ffdad6;color:#93000a;">down</span>'
+      : `<span class="chip">${esc(r.state)}</span>`;
+    h += `<tr style="${bad ? 'background:#fff5f5;' : ''}"><td>${esc(r.router)}</td>` +
+         `<td>${esc(r.interface)}</td><td>${chip}</td>` +
+         `<td class="num">${r.errors.toLocaleString()}</td>` +
+         `<td style="color:#737782;">${esc(r.detail)}</td></tr>`;
+  }
+  body.innerHTML = h + "</tbody></table></div>";
+}
+
+// Per-AP load. Channel utilisation is the headline: it explains slowness that
+// signal strength cannot.
+function drawApDetail(body, d) {
+  const rows = d.rows || [];
+  if (!rows.length) { body.innerHTML = '<div class="state">No access points reporting.</div>'; return; }
+  const pct = v => v == null ? "–" : Math.round(v) + "%";
+  const tint = v => v == null ? "" : (v >= 60 ? "color:#93000a;font-weight:600;"
+                                             : (v >= 40 ? "color:#8a5a06;" : ""));
+  let h = '<div class="tscroll"><table class="ptable"><thead><tr><th>Access Point</th>' +
+          '<th style="text-align:right;">Clients</th><th style="text-align:right;">2.4G util</th>' +
+          '<th style="text-align:right;">5G util</th><th style="text-align:right;">CPU</th>' +
+          '<th style="text-align:right;">Memory</th><th>Model</th></tr></thead><tbody>';
+  for (const r of rows) {
+    h += `<tr><td>${esc(r.ap_name)}</td>` +
+         `<td class="num">${r.clients == null ? "–" : r.clients}</td>` +
+         `<td class="num" style="${tint(r.util_2g)}">${pct(r.util_2g)}</td>` +
+         `<td class="num" style="${tint(r.util_5g)}">${pct(r.util_5g)}</td>` +
+         `<td class="num">${pct(r.cpu)}</td><td class="num">${pct(r.mem)}</td>` +
+         `<td>${esc(r.model)}</td></tr>`;
+  }
+  body.innerHTML = h + "</tbody></table></div>";
+}
+
+function drawAbuse(body, d) {
+  const rows = d.rows || [];
+  if (!rows.length) {
+    body.innerHTML = '<div class="state">Nothing unusual in this period.<br>' +
+                     'Tidak ada aktivitas tidak wajar pada periode ini.</div>';
+    return;
+  }
+  const when = s => s ? new Date(s).toLocaleString() : "–";
+  let h = '<div class="tscroll"><table class="ptable"><thead><tr><th>Device</th><th>Router</th>' +
+          '<th style="text-align:right;">Peak conn/s</th><th style="text-align:right;">Peak pkt/s</th>' +
+          '<th style="text-align:right;">SYN</th><th>Last seen</th></tr></thead><tbody>';
+  for (const r of rows) {
+    h += `<tr><td class="mono">${esc(r.ip)}</td><td>${esc(r.router)}</td>` +
+         `<td class="num">${r.conn_rate == null ? "–" : Math.round(r.conn_rate).toLocaleString()}</td>` +
+         `<td class="num">${r.pps == null ? "–" : Math.round(r.pps).toLocaleString()}</td>` +
+         `<td class="num">${r.syn_ratio == null ? "–" : Math.round(r.syn_ratio * 100) + "%"}</td>` +
+         `<td>${esc(when(r.last_seen))}</td></tr>`;
+  }
+  body.innerHTML = h + "</tbody></table></div>";
+}
+
 async function loadPanel(el, range) {
   const id = el.dataset.panel, kind = el.dataset.kind;
   const body = el.querySelector(".body");
@@ -477,6 +547,9 @@ async function loadPanel(el, range) {
     else if (kind === "aptable") drawAps(body, d);
     else if (kind === "dhcp") drawDhcp(body, d);
     else if (kind === "sla") drawSla(body, d);
+    else if (kind === "iferrors") drawIfErrors(body, d);
+    else if (kind === "apdetail") drawApDetail(body, d);
+    else if (kind === "abuse") drawAbuse(body, d);
     else drawChart(body, d.times, d.series, kind, (el.dataset.unit || ""));
   } catch (e) {
     body.innerHTML = `<div class="state">Unavailable right now.</div>`;

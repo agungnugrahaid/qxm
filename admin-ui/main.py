@@ -348,6 +348,190 @@ def _num(v):
     return None if v is None else float(v)
 
 
+def _pg_rows(sql, params):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def _reshape(rows, key_fn, value_cols):
+    """rows (ordered by bucket) -> (times, {series_name: [values]}).
+
+    Same shape the report collectors return. `key_fn(row, col_label)` names the
+    series. NOTE the `if name not in series` rather than setdefault: setdefault
+    rebuilds the [None]*len default on every row even when the key exists,
+    which is a real hot-path cost on 90-day windows.
+    """
+    times, seen = [], set()
+    for r in rows:
+        if r["t"] not in seen:
+            seen.add(r["t"])
+            times.append(r["t"])
+    idx = {t: i for i, t in enumerate(times)}
+    series = {}
+    for r in rows:
+        for label, col in value_cols:
+            name = key_fn(r, label)
+            if name not in series:
+                series[name] = [None] * len(times)
+            series[name][idx[r["t"]]] = r[col]
+    return times, series
+
+
+# --- Phase B portal collectors ------------------------------------------------
+# Portal-only, deliberately NOT in report_lib: that file is the PDF's contract
+# and the PDF stays as-is, so a panel added here can never change a
+# customer-facing document.
+
+def portal_uplinks(customer_id, start, end):
+    """Per-WAN throughput. The Internet Traffic panel sums every uplink; this
+    splits them, which is what tells a customer their backup link is carrying
+    traffic (or that a primary has gone quiet)."""
+    sql = """
+        WITH deltas AS (
+          SELECT um.router_id, r.identity_name AS router, um.uplink_label, um.time,
+            um.rx_bytes - LAG(um.rx_bytes) OVER w AS rx_d,
+            um.tx_bytes - LAG(um.tx_bytes) OVER w AS tx_d,
+            EXTRACT(EPOCH FROM (um.time - LAG(um.time) OVER w)) AS secs
+          FROM uplink_metrics um JOIN routers r ON r.id = um.router_id
+          WHERE r.customer_id = %(cid)s AND um.time BETWEEN %(start)s AND %(end)s
+          WINDOW w AS (PARTITION BY um.router_id, um.uplink_label ORDER BY um.time)
+        )
+        SELECT time_bucket_gapfill('5 minutes', time, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
+               router, uplink_label,
+               avg(CASE WHEN rx_d IS NULL THEN NULL ELSE GREATEST(rx_d, 0) * 8 / NULLIF(secs, 0) END) AS down,
+               avg(CASE WHEN tx_d IS NULL THEN NULL ELSE GREATEST(tx_d, 0) * 8 / NULLIF(secs, 0) END) AS up
+        FROM deltas GROUP BY 1, 2, 3 ORDER BY 1
+    """
+    rows = _pg_rows(sql, {"cid": customer_id, "start": start, "end": end})
+    multi = len({r["router"] for r in rows}) > 1
+    def name(r, label):
+        base = r["uplink_label"] or "uplink"
+        return f"{r['router']} {base} {label}" if multi else f"{base} {label}"
+    return _reshape(rows, name, [("↓", "down"), ("↑", "up")])
+
+
+def portal_conntrack(customer_id, start, end):
+    """Connection-table usage. At 100% the router silently drops new sessions
+    and the customer experiences it as 'the internet stopped', with every
+    latency graph still looking healthy."""
+    sql = """
+        SELECT time_bucket_gapfill('5 minutes', rm.time, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
+               r.identity_name AS router,
+               avg(CASE WHEN rm.conntrack_max > 0
+                        THEN 100.0 * rm.conntrack_count / rm.conntrack_max END) AS pct
+        FROM router_metrics rm JOIN routers r ON r.id = rm.router_id
+        WHERE r.customer_id = %(cid)s AND rm.time BETWEEN %(start)s AND %(end)s
+        GROUP BY 1, 2 ORDER BY 1
+    """
+    rows = _pg_rows(sql, {"cid": customer_id, "start": start, "end": end})
+    return _reshape(rows, lambda r, _: r["router"], [("", "pct")])
+
+
+def portal_iferrors(customer_id):
+    """Latest interface counters, problems only. A rising rx_fcs_error is how a
+    failing cable shows up -- exactly how the Kesatuan Bangsa fault was found."""
+    rows = _pg_rows(
+        """
+        SELECT DISTINCT ON (im.router_id, im.interface_name)
+               im.router_id, r.identity_name AS router, im.interface_name,
+               im.running, im.disabled,
+               im.rx_fcs_error, im.rx_too_short, im.rx_too_long, im.rx_overflow,
+               im.tx_collision, im.tx_late_collision
+        FROM interface_metrics im JOIN routers r ON r.id = im.router_id
+        WHERE r.customer_id = %s AND im.time > now() - interval '2 hours'
+        ORDER BY im.router_id, im.interface_name, im.time DESC
+        """,
+        (customer_id,),
+    )
+    # An unused switch port is "not running and not disabled" -- i.e. it looks
+    # exactly like a failed link. Reporting those as problems buries the real
+    # ones (Oakwood alone had 9 empty ports), so a DOWN interface is only a
+    # problem when it is a known uplink. Errors are always worth showing.
+    uplinks = {
+        (r["router_id"], r["interface_name"])
+        for r in _pg_rows(
+            """
+            SELECT DISTINCT r.id AS router_id, u.interface_name
+              FROM uplink_metrics u JOIN routers r ON r.id = u.router_id
+             WHERE r.customer_id = %(cid)s AND u.time > now() - interval '24 hours'
+                   AND u.interface_name IS NOT NULL
+            UNION
+            SELECT id, wan_interface FROM routers
+             WHERE customer_id = %(cid)s AND wan_interface IS NOT NULL
+            UNION
+            SELECT id, wan_interface_backup FROM routers
+             WHERE customer_id = %(cid)s AND wan_interface_backup IS NOT NULL
+            """,
+            {"cid": customer_id},
+        )
+    }
+    cols = ("rx_fcs_error", "rx_too_short", "rx_too_long", "rx_overflow",
+            "tx_collision", "tx_late_collision")
+    out = []
+    for r in rows:
+        errs = sum(int(r[c] or 0) for c in cols)
+        down = (not r["running"]) and (not r["disabled"])
+        is_uplink = (r["router_id"], r["interface_name"]) in uplinks
+        if not errs and not (down and is_uplink):
+            continue
+        out.append({"router": r["router"], "interface": r["interface_name"],
+                    "state": "down" if down else ("disabled" if r["disabled"] else "up"),
+                    "uplink": is_uplink,
+                    "errors": errs,
+                    "detail": ", ".join(f"{c.replace('_', ' ')}: {int(r[c])}"
+                                        for c in cols if int(r[c] or 0))})
+    out.sort(key=lambda x: (-x["errors"], x["router"]))
+    return out
+
+
+def portal_ap_detail(customer_id):
+    """Per-AP load and radio conditions. Channel utilisation is the number that
+    explains 'wifi is slow in a full function room' when every AP is online and
+    signal looks fine."""
+    rows = _pg_rows(
+        """
+        SELECT DISTINCT ON (a.ap_mac)
+               a.ap_name, a.model, a.cpu_pct, a.mem_pct,
+               a.channel_util_2g, a.channel_util_5g, a.num_sta, a.state
+        FROM ap_inventory a JOIN sites s ON s.id = a.site_id
+        WHERE s.customer_id = %s AND a.time > now() - interval '15 minutes'
+        ORDER BY a.ap_mac, a.time DESC
+        """,
+        (customer_id,),
+    )
+    out = [{"ap_name": r["ap_name"], "model": r["model"],
+            "clients": r["num_sta"],
+            "cpu": r["cpu_pct"], "mem": r["mem_pct"],
+            "util_2g": r["channel_util_2g"], "util_5g": r["channel_util_5g"]}
+           for r in rows if r["state"] == 1]
+    out.sort(key=lambda x: -(float(x["util_5g"] or 0) + float(x["util_2g"] or 0)))
+    return out[:40]
+
+
+def portal_abuse(customer_id, start, end):
+    """Clients opening sessions far faster than their peers -- typically a
+    compromised device or heavy P2P. Worded as something to look at, not an
+    accusation: the detector flags rate, it does not know intent."""
+    rows = _pg_rows(
+        """
+        SELECT r.identity_name AS router, e.internal_ip, e.first_seen, e.last_seen,
+               e.peak_conn_rate, e.peak_pps, e.syn_ratio
+        FROM flow_abuse_events e JOIN routers r ON r.id = e.router_id
+        WHERE e.customer_id = %s AND e.last_seen >= %s AND e.last_seen < %s
+        ORDER BY e.peak_conn_rate DESC LIMIT 50
+        """,
+        (customer_id, start, end),
+    )
+    return [{"router": r["router"], "ip": r["internal_ip"],
+             "first_seen": r["first_seen"], "last_seen": r["last_seen"],
+             "conn_rate": r["peak_conn_rate"], "pps": r["peak_pps"],
+             "syn_ratio": r["syn_ratio"]} for r in rows]
+
+
 def _jsonable(v):
     """Recursively make a payload JSON-safe. psycopg2 hands back Decimal for
     numeric columns and date/datetime for dates; JSONResponse is constructed
@@ -401,12 +585,37 @@ def portal_panel_list(customer_id, start, end):
          "title_id": "Kualitas Wi-Fi (Sinyal / Kepuasan / Pengulangan)"},
     ]
 
-    # Batch 1 additions -- only offered when the customer actually has the
-    # data, so nobody gets an empty card. Each check is a cheap EXISTS.
+    # Only offered when the customer actually has the data, so nobody gets an
+    # empty card. Each check is a cheap EXISTS.
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT EXISTS (SELECT 1 FROM sites WHERE customer_id = %s) AS x", (customer_id,))
     has_wireless = cur.fetchone()["x"]
+    cur.execute(
+        """SELECT EXISTS (
+             SELECT 1 FROM uplink_metrics u JOIN routers r ON r.id = u.router_id
+             WHERE r.customer_id = %s AND u.time > now() - interval '24 hours') AS x""",
+        (customer_id,),
+    )
+    has_uplinks = cur.fetchone()["x"]
+    cur.execute(
+        """SELECT EXISTS (
+             SELECT 1 FROM router_metrics m JOIN routers r ON r.id = m.router_id
+             WHERE r.customer_id = %s AND m.time > now() - interval '24 hours'
+               AND m.conntrack_max > 0) AS x""",
+        (customer_id,),
+    )
+    has_conntrack = cur.fetchone()["x"]
+    cur.execute(
+        """SELECT EXISTS (
+             SELECT 1 FROM interface_metrics i JOIN routers r ON r.id = i.router_id
+             WHERE r.customer_id = %s AND i.time > now() - interval '2 hours') AS x""",
+        (customer_id,),
+    )
+    has_ifaces = cur.fetchone()["x"]
+    cur.execute("SELECT EXISTS (SELECT 1 FROM flow_abuse_events WHERE customer_id = %s) AS x",
+                (customer_id,))
+    has_abuse = cur.fetchone()["x"]
     cur.execute(
         """SELECT EXISTS (
              SELECT 1 FROM dhcp_pool_metrics d JOIN routers r ON r.id = d.router_id
@@ -422,10 +631,47 @@ def portal_panel_list(customer_id, start, end):
     has_sla = cur.fetchone()["x"]
     conn.close()
 
+    if has_uplinks:
+        panels.append({"id": "uplinks", "section": "internet", "kind": "line", "unit": "bps",
+                       "title_en": "Traffic per Uplink",
+                       "title_id": "Trafik per Uplink"})
     if has_wireless:
         panels.append({"id": "aps", "section": "wireless", "kind": "aptable",
                        "title_en": "Access Point Status",
                        "title_id": "Status Access Point"})
+        panels.append({"id": "apdetail", "section": "wireless", "kind": "apdetail",
+                       "title_en": "Access Point Load & Radio",
+                       "title_id": "Beban & Radio Access Point",
+                       "note_en": "Channel utilisation above ~60% means the airtime is congested, "
+                                  "even when signal strength looks healthy.",
+                       "note_id": "Utilisasi kanal di atas ~60% menandakan airtime padat, "
+                                  "walaupun kekuatan sinyal terlihat baik."})
+    if has_conntrack:
+        panels.append({"id": "conntrack", "section": "health", "kind": "line", "unit": "%",
+                       "title_en": "Connection Table Usage",
+                       "title_id": "Penggunaan Tabel Koneksi",
+                       "note_en": "At 100% the router cannot open new sessions, which is felt "
+                                  "as the internet stopping even while latency looks normal.",
+                       "note_id": "Pada 100% router tidak dapat membuka sesi baru, terasa seperti "
+                                  "internet berhenti walaupun latensi terlihat normal."})
+    if has_ifaces:
+        panels.append({"id": "iferrors", "section": "health", "kind": "iferrors",
+                       "title_en": "Interface Problems",
+                       "title_id": "Masalah Antarmuka",
+                       "note_en": "Only interfaces that are down or reporting errors are listed. "
+                                  "Rising error counts usually mean a cable or optic fault.",
+                       "note_id": "Hanya antarmuka yang mati atau bermasalah yang ditampilkan. "
+                                  "Jumlah error yang naik biasanya berarti gangguan kabel atau optik."})
+    if has_abuse:
+        panels.append({"id": "abuse", "section": "traffic", "kind": "abuse",
+                       "title_en": "Unusually Active Devices",
+                       "title_id": "Perangkat dengan Aktivitas Tidak Wajar",
+                       "note_en": "Devices opening connections far faster than others on the same "
+                                  "network. Often a compromised device or peer-to-peer software — "
+                                  "worth checking, not proof of a problem.",
+                       "note_id": "Perangkat yang membuka koneksi jauh lebih cepat dari perangkat "
+                                  "lain di jaringan yang sama. Sering karena perangkat terinfeksi "
+                                  "atau aplikasi peer-to-peer — perlu diperiksa, bukan bukti masalah."})
     if has_dhcp:
         panels.append({"id": "dhcp", "section": "health", "kind": "dhcp",
                        "title_en": "DHCP Pool Utilisation",
@@ -568,6 +814,20 @@ def portal_api_series(request: Request, panel: str, range: str = PORTAL_RANGE_DE
             rows, summary_en, summary_id = collect_ap_rows(customer_id)
             out["rows"] = rows
             out["summary_en"], out["summary_id"] = summary_en, summary_id
+        elif panel == "uplinks":
+            times, series = portal_uplinks(customer_id, start, end)
+            out["times"] = _epochs(times)
+            out["series"] = {k: [_num(x) for x in v] for k, v in series.items()}
+        elif panel == "conntrack":
+            times, series = portal_conntrack(customer_id, start, end)
+            out["times"] = _epochs(times)
+            out["series"] = {k: [_num(x) for x in v] for k, v in series.items()}
+        elif panel == "iferrors":
+            out["rows"] = portal_iferrors(customer_id)
+        elif panel == "apdetail":
+            out["rows"] = portal_ap_detail(customer_id)
+        elif panel == "abuse":
+            out["rows"] = portal_abuse(customer_id, start, end)
         elif panel == "dhcp":
             # Latest reading per pool. A full pool means guests silently fail
             # to get an address -- it presents as "wifi is broken", so this is
