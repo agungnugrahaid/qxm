@@ -100,9 +100,16 @@
       .rail ul { display: none; }
       .rail-select { display: block; }
     }
-    /* Wide tables scroll inside their own panel rather than widening the
-       column -- the other half of keeping section widths identical. */
-    .panel .body { overflow-x: auto; }
+    /* Wide tables scroll inside their own wrapper rather than widening the
+       column. This is deliberately NOT on .panel .body: uPlot's own stylesheet
+       sets `.uplot { width: min-content }`, and a min-content child inside an
+       overflow-x scroll container collapses toward its smallest content -- so
+       putting the scroller on .body shrank every chart while leaving the
+       width:100% tables alone. That was the "Internet section is too small". */
+    .tscroll { overflow-x: auto; }
+    /* Belt and braces against the same min-content rule. */
+    .uplot { width: 100%; }
+    .u-wrap { max-width: 100%; }
     /* uPlot's legend is a table with one column per series; the per-router
        path chart has 12, so it is far wider than the plot. Let it wrap
        instead of dictating the panel's width. */
@@ -348,9 +355,9 @@ function drawTable(host, rows) {
   if (!rows || !rows.length) {
     host.innerHTML = '<div class="state">No data for this period.</div>'; return;
   }
-  let h = '<table class="ptable"><thead><tr><th>Provider</th><th style="text-align:right;">Traffic</th></tr></thead><tbody>';
+  let h = '<div class="tscroll"><table class="ptable"><thead><tr><th>Provider</th><th style="text-align:right;">Traffic</th></tr></thead><tbody>';
   for (const r of rows) h += `<tr><td>${r.provider}</td><td class="num">${r.bytes_human}</td></tr>`;
-  host.innerHTML = h + "</tbody></table>";
+  host.innerHTML = h + "</tbody></table></div>";
 }
 
 function drawBars(host, rows) {
@@ -358,14 +365,14 @@ function drawBars(host, rows) {
     host.innerHTML = '<div class="state">No data for this period.</div>'; return;
   }
   const max = Math.max(...rows.map(r => r.value || 0)) || 1;
-  let h = '<table class="ptable"><tbody>';
+  let h = '<div class="tscroll"><table class="ptable"><tbody>';
   for (const r of rows) {
     const pct = Math.max(2, Math.round(100 * (r.value || 0) / max));
     h += `<tr><td style="width:160px;">${r.label}</td>` +
          `<td><div class="bar" style="width:${pct}%"></div></td>` +
          `<td class="num" style="width:90px;">${r.human || fmtBytes(r.value)}</td></tr>`;
   }
-  host.innerHTML = h + "</tbody></table>";
+  host.innerHTML = h + "</tbody></table></div>";
 }
 
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
@@ -379,7 +386,7 @@ function drawAps(body, d) {
   if (!rows.length) { body.innerHTML = '<div class="state">No access points reporting.</div>'; return; }
   let h = `<p class="sub" style="margin:-0.3rem 0 0.6rem;">${esc(d.summary_en)}<br>
            <span style="color:#a3a7b2;">${esc(d.summary_id)}</span></p>`;
-  h += '<div style="max-height:420px; overflow:auto;"><table class="ptable"><thead><tr>' +
+  h += '<div class="tscroll" style="max-height:420px; overflow-y:auto;"><table class="ptable"><thead><tr>' +
        '<th>Access Point</th><th>Status</th><th style="text-align:right;">Clients</th>' +
        '<th style="text-align:right;">Satisfaction</th><th>Model</th></tr></thead><tbody>';
   for (const r of rows) {
@@ -403,7 +410,7 @@ function drawAps(body, d) {
 function drawDhcp(body, d) {
   const rows = d.rows || [];
   if (!rows.length) { body.innerHTML = '<div class="state">No DHCP pool data.</div>'; return; }
-  let h = '<table class="ptable"><thead><tr><th>Router</th><th>Pool</th>' +
+  let h = '<div class="tscroll"><table class="ptable"><thead><tr><th>Router</th><th>Pool</th>' +
           '<th style="text-align:right;">In use</th><th style="text-align:right;">Size</th>' +
           '<th style="width:35%;">Utilisation</th></tr></thead><tbody>';
   for (const r of rows) {
@@ -418,7 +425,7 @@ function drawDhcp(body, d) {
          `<span style="width:42px;text-align:right;color:${col};font-weight:600;">${pct == null ? "–" : pct + "%"}</span>` +
          `</div></td></tr>`;
   }
-  body.innerHTML = h + "</tbody></table>";
+  body.innerHTML = h + "</tbody></table></div>";
 }
 
 // SLA + tickets. Same numbers as the PDF, but continuous instead of monthly.
@@ -436,23 +443,23 @@ function drawSla(body, d) {
   }
   for (const m of months) {
     h += `<h3 style="font-size:0.85rem;margin:0.9rem 0 0.35rem;">${esc(m.label)}</h3>`;
-    h += '<table class="ptable"><thead><tr><th>Service</th><th>ID</th>' +
+    h += '<div class="tscroll"><table class="ptable"><thead><tr><th>Service</th><th>ID</th>' +
          '<th style="text-align:right;">Nodes</th><th style="text-align:right;">SLA</th></tr></thead><tbody>';
     for (const s of m.services) {
       h += `<tr><td>${esc(s.service_name)}</td><td>${esc(s.service_id)}</td>` +
            `<td class="num">${s.node_count}</td><td class="num">${esc(s.sla)}</td></tr>`;
     }
     h += `<tr><td colspan="2"><b>Total</b></td><td class="num"><b>${m.total_nodes}</b></td>` +
-         `<td class="num"><b>${esc(m.total_sla)}</b></td></tr></tbody></table>`;
+         `<td class="num"><b>${esc(m.total_sla)}</b></td></tr></tbody></table></div>`;
     if (m.tickets.length) {
-      h += '<table class="ptable" style="margin-top:0.5rem;"><thead><tr><th>Ticket</th><th>Date</th>' +
+      h += '<div class="tscroll"><table class="ptable" style="margin-top:0.5rem;"><thead><tr><th>Ticket</th><th>Date</th>' +
            '<th>Description</th><th>Action</th><th style="text-align:right;">MTTR</th><th>Status</th></tr></thead><tbody>';
       for (const t of m.tickets) {
         h += `<tr><td>${esc(t.ticket_no)}</td><td>${esc(t.date)}</td>` +
              `<td>${esc(t.description)}</td><td>${esc(t.action)}</td>` +
              `<td class="num">${esc(t.mttr)}</td><td>${esc(t.status)}</td></tr>`;
       }
-      h += "</tbody></table>";
+      h += "</tbody></table></div>";
     }
   }
   body.innerHTML = h;
