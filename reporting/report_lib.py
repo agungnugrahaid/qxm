@@ -132,6 +132,53 @@ def _provider_icon(label):
         return "", _ICON_BRANDS   # roblox-creator-studio
     return "", _ICON_SOLID        # globe (fastly / akamai / gmedia / ISPs)
 
+# Controller model codes -> "[Brand] [commercial name]" for the customer-facing
+# inventory. The controllers report internal codes, which mean nothing to a
+# hotel's IT contact.
+#
+# ⚠️ The UniFi "U7*" prefix is the AC-era chipset family, NOT Wi-Fi 7: U7PG2 is
+# the AC Pro and U7LT the AC Lite. The fleet also contains U7PRO, which IS the
+# Wi-Fi 7 U7 Pro -- so mapping U7PG2 to "U7 Pro" would give two different
+# products the same name and describe 221 Wi-Fi 5 APs as Wi-Fi 7.
+AP_MODEL_NAMES = {
+    # UniFi -- original
+    "BZ2": "UniFi AP", "BZ2LR": "UniFi AP LR",
+    "U2O": "UniFi AP Outdoor", "U2Sv2": "UniFi AP v2",
+    # UniFi -- AC generation (Wi-Fi 5)
+    "U7LT": "UniFi AC Lite", "U7LR": "UniFi AC LR", "U7PG2": "UniFi AC Pro",
+    "U7MP": "UniFi AC Mesh Pro", "U7MSH": "UniFi AC Mesh",
+    "U7HD": "UniFi AC HD", "U7NHD": "UniFi nanoHD",
+    # UniFi -- Wi-Fi 6 / 7
+    "UAP6MP": "UniFi U6 Pro", "UALR6v2": "UniFi U6 LR", "U6M": "UniFi U6 Mesh",
+    "U7PRO": "UniFi U7 Pro",
+    # UniFi switches (they land in ap_inventory too)
+    "US24P250": "UniFi Switch 24 PoE", "US24PRO": "UniFi Switch Pro 24",
+    "US48P500": "UniFi Switch 48 PoE", "USL48P": "UniFi Switch Lite 48 PoE",
+    # Ruijie
+    "AP680(CD)": "Ruijie RG-AP680(CD)", "AP720-L": "Ruijie RG-AP720-L",
+    "AP820-L(V2)": "Ruijie RG-AP820-L (V2)", "AP820-L(V3)": "Ruijie RG-AP820-L (V3)",
+    "AP840-L": "Ruijie RG-AP840-L",
+    "RAP2200(E)": "Ruijie RG-RAP2200(E)", "RAP2260(G)": "Ruijie RG-RAP2260(G)",
+    "RAP6262(G)": "Ruijie RG-RAP6262(G)", "RAP73Pro": "Ruijie RG-RAP73 Pro",
+}
+
+
+def ap_model_name(code):
+    """Friendly name for a controller model code. Unknown codes fall back to
+    brand + the raw code rather than a guess -- a wrong product name on a
+    customer's equipment list is worse than an unfamiliar one."""
+    if not code:
+        return "Unknown"
+    code = code.strip()
+    if code in AP_MODEL_NAMES:
+        return AP_MODEL_NAMES[code]
+    if code.upper().startswith(("RAP", "AP")):
+        return f"Ruijie RG-{code}"
+    if code.upper().startswith(("U", "BZ", "US")):
+        return f"UniFi {code}"
+    return code
+
+
 def get_conn():
     conn = psycopg2.connect(DATABASE_URL)
     conn.cursor_factory = psycopg2.extras.RealDictCursor
@@ -316,6 +363,11 @@ def collect_ap_rows(customer_id):
             r["chip"] = "chip-warn"
         else:
             r["chip"] = "chip-ok"
+        # "UniFi AC Pro" rather than "U7PG2" -- the controller code means
+        # nothing to the customer reading the report. Raw code kept as `code`
+        # so the portal can show it alongside; the PDF prints the name only.
+        r["code"] = r["model"]
+        r["model"] = ap_model_name(r["model"])
     online = sum(1 for r in rows if r["status"] == "online")
     offline = len(rows) - online
     summary_en = f"{len(rows)} access points -- {online} online / {offline} offline"
