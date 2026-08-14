@@ -84,7 +84,15 @@
            class="{{ 'on' if r == range else '' }}">{{ r }}</a>
         {% endfor %}
       </span>
-      <a class="btn" href="/portal/report?days=30">PDF report</a>
+      <form class="inline" method="get" action="/portal/report"
+            style="display:flex; gap:0.35rem; align-items:center; margin:0;">
+        <input type="date" name="start" value="{{ report_start_default }}" required
+               style="height:32px; padding:0 0.4rem; font-size:0.8rem;">
+        <span style="color:#737782;">–</span>
+        <input type="date" name="end" value="{{ report_end_default }}" required
+               style="height:32px; padding:0 0.4rem; font-size:0.8rem;">
+        <button class="btn" type="submit">PDF</button>
+      </form>
       {% if preview_as %}
       <a class="btn" href="/customers/{{ preview_as }}">Back to Console</a>
       {% else %}
@@ -253,6 +261,96 @@ function drawBars(host, rows) {
   host.innerHTML = h + "</tbody></table>";
 }
 
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// Access points. Offline first (collect_ap_rows already orders that way), with
+// the rows that need attention marked -- that is the question this panel is
+// actually asked: which AP is down, and where.
+function drawAps(body, d) {
+  const rows = d.rows || [];
+  if (!rows.length) { body.innerHTML = '<div class="state">No access points reporting.</div>'; return; }
+  let h = `<p class="sub" style="margin:-0.3rem 0 0.6rem;">${esc(d.summary_en)}<br>
+           <span style="color:#a3a7b2;">${esc(d.summary_id)}</span></p>`;
+  h += '<div style="max-height:420px; overflow:auto;"><table class="ptable"><thead><tr>' +
+       '<th>Access Point</th><th>Status</th><th style="text-align:right;">Clients</th>' +
+       '<th style="text-align:right;">Satisfaction</th><th>Model</th></tr></thead><tbody>';
+  for (const r of rows) {
+    const off = r.status !== "online";
+    const sat = r.satisfaction;
+    const low = !off && sat != null && sat < 70;
+    const tint = off ? "background:#fff5f5;" : (low ? "background:#fff8ec;" : "");
+    const chip = off
+      ? '<span class="chip" style="background:#ffdad6;color:#93000a;">offline</span>'
+      : '<span class="chip">online</span>';
+    h += `<tr style="${tint}"><td>${esc(r.ap_name)}</td><td>${chip}</td>` +
+         `<td class="num">${r.num_sta == null ? "–" : r.num_sta}</td>` +
+         `<td class="num">${sat == null ? "–" : sat + "%"}</td>` +
+         `<td>${esc(r.model)}</td></tr>`;
+  }
+  body.innerHTML = h + "</tbody></table></div>";
+}
+
+// DHCP pools. A pool at 100% means guests cannot get an address at all, which
+// reaches the customer as "the wifi is broken" -- so it is colour-graded.
+function drawDhcp(body, d) {
+  const rows = d.rows || [];
+  if (!rows.length) { body.innerHTML = '<div class="state">No DHCP pool data.</div>'; return; }
+  let h = '<table class="ptable"><thead><tr><th>Router</th><th>Pool</th>' +
+          '<th style="text-align:right;">In use</th><th style="text-align:right;">Size</th>' +
+          '<th style="width:35%;">Utilisation</th></tr></thead><tbody>';
+  for (const r of rows) {
+    const pct = r.pct == null ? null : Math.round(r.pct);
+    const col = pct == null ? "#c3c6d2" : pct >= 90 ? "#93000a" : pct >= 75 ? "#8a5a06" : "#1e4b8f";
+    h += `<tr><td>${esc(r.router)}</td><td>${esc(r.pool)}</td>` +
+         `<td class="num">${r.used == null ? "–" : r.used}</td>` +
+         `<td class="num">${r.total == null ? "–" : r.total}</td>` +
+         `<td><div style="display:flex;align-items:center;gap:0.5rem;">` +
+         `<div style="flex:1;background:#eef2fa;border-radius:3px;height:8px;">` +
+         `<div style="width:${pct == null ? 0 : Math.min(pct, 100)}%;background:${col};height:8px;border-radius:3px;"></div></div>` +
+         `<span style="width:42px;text-align:right;color:${col};font-weight:600;">${pct == null ? "–" : pct + "%"}</span>` +
+         `</div></td></tr>`;
+  }
+  body.innerHTML = h + "</tbody></table>";
+}
+
+// SLA + tickets. Same numbers as the PDF, but continuous instead of monthly.
+function drawSla(body, d) {
+  const months = d.months || [];
+  if (!months.length) { body.innerHTML = '<div class="state">No SLA records for this period.</div>'; return; }
+  let h = "";
+  if (d.overall) {
+    h += '<div class="kpi-row" style="margin-bottom:1rem;">' +
+      `<div class="kpi-box"><div class="v">${esc(d.overall.sla)}</div><div class="l">SLA Achievement</div></div>` +
+      `<div class="kpi-box"><div class="v">${esc(d.overall.tickets)}</div><div class="l">Tickets This Period</div></div>` +
+      `<div class="kpi-box"><div class="v">${esc(d.overall.duration)}</div><div class="l">Total Ticket Duration</div></div>` +
+      (d.ytd ? `<div class="kpi-box"><div class="v">${esc(d.ytd.sla)}</div><div class="l">Year to Date (${esc(d.ytd.year)})</div></div>` : "") +
+      "</div>";
+  }
+  for (const m of months) {
+    h += `<h3 style="font-size:0.85rem;margin:0.9rem 0 0.35rem;">${esc(m.label)}</h3>`;
+    h += '<table class="ptable"><thead><tr><th>Service</th><th>ID</th>' +
+         '<th style="text-align:right;">Nodes</th><th style="text-align:right;">SLA</th></tr></thead><tbody>';
+    for (const s of m.services) {
+      h += `<tr><td>${esc(s.service_name)}</td><td>${esc(s.service_id)}</td>` +
+           `<td class="num">${s.node_count}</td><td class="num">${esc(s.sla)}</td></tr>`;
+    }
+    h += `<tr><td colspan="2"><b>Total</b></td><td class="num"><b>${m.total_nodes}</b></td>` +
+         `<td class="num"><b>${esc(m.total_sla)}</b></td></tr></tbody></table>`;
+    if (m.tickets.length) {
+      h += '<table class="ptable" style="margin-top:0.5rem;"><thead><tr><th>Ticket</th><th>Date</th>' +
+           '<th>Description</th><th>Action</th><th style="text-align:right;">MTTR</th><th>Status</th></tr></thead><tbody>';
+      for (const t of m.tickets) {
+        h += `<tr><td>${esc(t.ticket_no)}</td><td>${esc(t.date)}</td>` +
+             `<td>${esc(t.description)}</td><td>${esc(t.action)}</td>` +
+             `<td class="num">${esc(t.mttr)}</td><td>${esc(t.status)}</td></tr>`;
+      }
+      h += "</tbody></table>";
+    }
+  }
+  body.innerHTML = h;
+}
+
 async function loadPanel(el) {
   const id = el.dataset.panel, kind = el.dataset.kind;
   const body = el.querySelector(".body");
@@ -262,6 +360,9 @@ async function loadPanel(el) {
     if (d.error) { body.innerHTML = `<div class="state">Unavailable right now.</div>`; return; }
     if (kind === "table") drawTable(body, d.rows);
     else if (kind === "bar") drawBars(body, d.rows);
+    else if (kind === "aptable") drawAps(body, d);
+    else if (kind === "dhcp") drawDhcp(body, d);
+    else if (kind === "sla") drawSla(body, d);
     else drawChart(body, d.times, d.series, kind, (el.dataset.unit || ""));
   } catch (e) {
     body.innerHTML = `<div class="state">Unavailable right now.</div>`;

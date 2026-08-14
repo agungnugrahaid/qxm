@@ -44,7 +44,8 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+import decimal
+from datetime import date, datetime, timedelta, timezone
 
 import psycopg2
 import psycopg2.extras
@@ -65,6 +66,7 @@ from report_lib import (
     collect_kpis,
     collect_path,
     collect_resource,
+    collect_sla,
     collect_traffic,
     collect_wifi_quality,
     flow_enabled,
@@ -333,6 +335,22 @@ def _num(v):
     return None if v is None else float(v)
 
 
+def _jsonable(v):
+    """Recursively make a payload JSON-safe. psycopg2 hands back Decimal for
+    numeric columns and date/datetime for dates; JSONResponse is constructed
+    AFTER the per-panel try/except, so one stray Decimal 500s the endpoint
+    instead of degrading that single panel. (Bit us on ap_inventory.cpu_pct.)"""
+    if isinstance(v, decimal.Decimal):
+        return float(v)
+    if isinstance(v, (datetime, date)):
+        return v.isoformat()
+    if isinstance(v, dict):
+        return {k: _jsonable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_jsonable(x) for x in v]
+    return v
+
+
 def portal_panel_list(customer_id, start, end):
     """Panel descriptors for the portal, mirroring the customer dashboard's
     layout. Cheap -- no series data, just what exists for this customer."""
@@ -369,6 +387,42 @@ def portal_panel_list(customer_id, start, end):
          "title_en": "Wi-Fi Quality (Signal / Satisfaction / Retry)",
          "title_id": "Kualitas Wi-Fi (Sinyal / Kepuasan / Pengulangan)"},
     ]
+
+    # Batch 1 additions -- only offered when the customer actually has the
+    # data, so nobody gets an empty card. Each check is a cheap EXISTS.
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT EXISTS (SELECT 1 FROM sites WHERE customer_id = %s) AS x", (customer_id,))
+    has_wireless = cur.fetchone()["x"]
+    cur.execute(
+        """SELECT EXISTS (
+             SELECT 1 FROM dhcp_pool_metrics d JOIN routers r ON r.id = d.router_id
+             WHERE r.customer_id = %s AND d.time > now() - interval '24 hours') AS x""",
+        (customer_id,),
+    )
+    has_dhcp = cur.fetchone()["x"]
+    cur.execute(
+        """SELECT EXISTS (SELECT 1 FROM customer_sla_services WHERE customer_id = %s)
+                OR EXISTS (SELECT 1 FROM customer_tickets WHERE customer_id = %s) AS x""",
+        (customer_id, customer_id),
+    )
+    has_sla = cur.fetchone()["x"]
+    conn.close()
+
+    if has_wireless:
+        panels.append({"id": "aps", "kind": "aptable",
+                       "title_en": "Access Point Status",
+                       "title_id": "Status Access Point"})
+    if has_dhcp:
+        panels.append({"id": "dhcp", "kind": "dhcp",
+                       "title_en": "DHCP Pool Utilisation",
+                       "title_id": "Penggunaan Alamat DHCP"})
+    if has_sla:
+        panels.append({"id": "sla", "kind": "sla",
+                       "title_en": "SLA & Support Tickets",
+                       "title_id": "SLA & Tiket Dukungan",
+                       "note_en": "Recent months — not affected by the range selector above.",
+                       "note_id": "Beberapa bulan terakhir — tidak mengikuti pilihan rentang di atas."})
     if flow_enabled(customer_id):
         panels += [
             {"id": "flow_providers", "kind": "table",
@@ -419,6 +473,8 @@ def portal_home(request: Request, range: str = PORTAL_RANGE_DEFAULT,
          # Only ever set for an admin preview; a customer session gets "" and
          # the value is ignored server-side even if they add it by hand.
          "preview_as": as_ if is_admin else None,
+         "report_start_default": (end - timedelta(days=30)).strftime("%Y-%m-%d"),
+         "report_end_default": end.strftime("%Y-%m-%d"),
          "user": request.state.session_user},
     )
 
@@ -432,7 +488,7 @@ def portal_api_kpis(request: Request, range: str = PORTAL_RANGE_DEFAULT,
         kpis = collect_kpis(customer_id, start, end)
     except Exception:
         kpis = []
-    return JSONResponse({"kpis": [{"en": en, "id": idn, "value": v} for en, idn, v in kpis]})
+    return JSONResponse(_jsonable({"kpis": [{"en": en, "id": idn, "value": v} for en, idn, v in kpis]}))
 
 
 @app.get("/portal/api/series")
@@ -492,13 +548,66 @@ def portal_api_series(request: Request, panel: str, range: str = PORTAL_RANGE_DE
             rows, summary_en, summary_id = collect_ap_rows(customer_id)
             out["rows"] = rows
             out["summary_en"], out["summary_id"] = summary_en, summary_id
+        elif panel == "dhcp":
+            # Latest reading per pool. A full pool means guests silently fail
+            # to get an address -- it presents as "wifi is broken", so this is
+            # worth a card of its own rather than a line on a graph.
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT DISTINCT ON (d.router_id, d.pool_name)
+                       r.identity_name AS router, d.pool_name,
+                       d.total_addresses, d.active_leases, d.utilization_pct
+                FROM dhcp_pool_metrics d JOIN routers r ON r.id = d.router_id
+                WHERE r.customer_id = %s AND d.time > now() - interval '24 hours'
+                ORDER BY d.router_id, d.pool_name, d.time DESC
+                """,
+                (customer_id,),
+            )
+            out["rows"] = [
+                {"router": r["router"], "pool": r["pool_name"],
+                 "total": r["total_addresses"], "used": r["active_leases"],
+                 "pct": float(r["utilization_pct"]) if r["utilization_pct"] is not None else None}
+                for r in cur.fetchall()
+            ]
+            conn.close()
+            out["rows"].sort(key=lambda r: (r["pct"] is None, -(r["pct"] or 0)))
+        elif panel == "sla":
+            # SLA and tickets are monthly by nature. Tying them to the range
+            # picker means a 24h view renders an empty card even though the
+            # customer has records -- so this panel always covers the last
+            # three whole months plus the current one, whatever the picker says.
+            sla_start = (end.replace(day=1) - timedelta(days=62)).replace(day=1)
+            months, overall, ytd = collect_sla(customer_id, sla_start, end)
+            out["overall"] = overall
+            out["ytd"] = ytd
+            out["months"] = [
+                {
+                    "label": m["label"],
+                    "total_sla": m["total_sla"],
+                    "total_nodes": m["total_nodes"],
+                    "services": [
+                        {"service_id": s["service_id"], "service_name": s["service_name"],
+                         "node_count": s["node_count"], "sla": s["sla_fmt"]}
+                        for s in m["services"]
+                    ],
+                    "tickets": [
+                        {"ticket_no": t["ticket_no"], "date": t["tanggal_fmt"],
+                         "description": t["description"], "action": t["action"],
+                         "mttr": t["mttr_fmt"], "status": t["status"]}
+                        for t in m["tickets"]
+                    ],
+                }
+                for m in months
+            ]
         else:
             return JSONResponse({"error": "unknown panel"}, status_code=404)
     except Exception as e:
         # A single failing panel must not take the page down.
         return JSONResponse({"panel": panel, "error": str(e)[:200]}, status_code=200)
 
-    return JSONResponse(out)
+    return JSONResponse(_jsonable(out))
 
 
 # --- Portal user management (admin side) -------------------------------------
@@ -599,12 +708,26 @@ def portal_user_delete(request: Request, customer_id: int, user_id: int):
 
 
 @app.get("/portal/report")
-def portal_report(request: Request, days: int = 30):
+def portal_report(request: Request, days: int = 30, start: str = "", end: str = "",
+                  as_: int = Query(None, alias="as")):
     """The customer's own PDF. Same generator as the Console button, but the
-    id comes from the session, so ?customer_id= cannot be forged."""
-    customer_id = portal_customer_id(request)
+    id comes from the session, so ?customer_id= cannot be forged.
+
+    Period: explicit ?start=&end= (whole WIB days, inclusive) wins over ?days=,
+    mirroring the Console's date picker."""
+    customer_id = portal_customer_id(request, as_)
+    start_dt = end_dt = None
+    if start and end:
+        try:
+            start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=WIB)
+            end_dt = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=WIB) + timedelta(days=1)
+        except ValueError:
+            return RedirectResponse("/portal?error=report_range", status_code=303)
+        if end_dt <= start_dt or (end_dt - start_dt) > timedelta(days=366):
+            return RedirectResponse("/portal?error=report_range", status_code=303)
     days = max(1, min(int(days), 90))
-    customer_name, pdf_bytes = generate_report(customer_id, days=days)
+    customer_name, pdf_bytes = generate_report(customer_id, days=days,
+                                               start=start_dt, end=end_dt)
     filename = f"{slugify(customer_name)}-report.pdf"
     return Response(
         pdf_bytes,
