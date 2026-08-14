@@ -54,7 +54,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from dashboard_share import share_dashboard_for_customer, slugify
+from dashboard_share import slugify
 from portal_auth import find_customer_user, hash_password, touch_last_login, verify_password
 from deploy_lib import load_templates, push_to_router
 from report_lib import (
@@ -2351,33 +2351,6 @@ def delete_customer(customer_id: int):
     conn.commit()
     conn.close()
     return RedirectResponse("/customers", status_code=303)
-
-
-@app.post("/customers/{customer_id}/share-dashboard")
-def share_dashboard(request: Request, customer_id: int):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM customers WHERE id = %s", (customer_id,))
-    customer = cur.fetchone()
-    # Per-customer section flags: strip sections the customer has no data for so
-    # the shared clone never shows empty router/wireless/flow panels.
-    cur.execute("SELECT count(*) AS n FROM routers WHERE customer_id = %s", (customer_id,))
-    has_routers = cur.fetchone()["n"] > 0
-    cur.execute("SELECT count(*) AS n FROM sites WHERE customer_id = %s", (customer_id,))
-    has_wireless = cur.fetchone()["n"] > 0
-    conn.close()
-    flags = {"has_routers": has_routers, "has_wireless": has_wireless,
-             "include_flow": customer_has_flow(customer_id)}
-
-    try:
-        url = share_dashboard_for_customer(customer_id, customer["name"], flags)
-        result = {"ok": True, "detail": url}
-    except Exception as e:
-        result = {"ok": False, "detail": str(e)}
-
-    return templates.TemplateResponse(
-        "share_dashboard_result.html", {"request": request, "customer": customer, "result": result}
-    )
 
 
 @app.get("/customers/{customer_id}/report")
