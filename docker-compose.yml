@@ -270,9 +270,14 @@ services:
     build: ./watchdog
     environment:
       WEBHOOK_URL: ${WEBHOOK_URL:-}
+      # The incident detector runs here too: it is the same "is anything
+      # broken" job, and the collector-freshness alert this stack has been
+      # missing belongs in the same place.
+      DATABASE_URL: postgresql://qoe:${DB_PASSWORD:-changeme}@timescaledb:5432/qoe
     depends_on:
       - ingestion-api
       - admin-ui
+      - timescaledb
     restart: unless-stopped
 
 volumes:
