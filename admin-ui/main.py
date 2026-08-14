@@ -504,7 +504,7 @@ def portal_ap_detail(customer_id):
         """,
         (customer_id,),
     )
-    out = [{"ap_name": r["ap_name"], "model": r["model"],
+    out = [{"ap_name": r["ap_name"], "model": ap_model_name(r["model"]), "code": r["model"],
             "clients": r["num_sta"],
             "cpu": r["cpu_pct"], "mem": r["mem_pct"],
             "util_2g": r["channel_util_2g"], "util_5g": r["channel_util_5g"]}
@@ -1017,6 +1017,12 @@ def portal_api_series(request: Request, panel: str, range: str = PORTAL_RANGE_DE
                            for l, v, h in zip(labels, values, human)]
         elif panel == "aps":
             rows, summary_en, summary_id = collect_ap_rows(customer_id)
+            # Friendly model names for the portal only -- collect_ap_rows is
+            # shared with the PDF and the PDF stays as-is, so the rename
+            # happens here rather than in report_lib.
+            for r in rows:
+                r["code"] = r.get("model")
+                r["model"] = ap_model_name(r.get("model"))
             out["rows"] = rows
             out["summary_en"], out["summary_id"] = summary_en, summary_id
         elif panel == "uplinks":

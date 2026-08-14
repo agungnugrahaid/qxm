@@ -67,6 +67,13 @@
     .ptable td { padding: 0.32rem 0.4rem; border-top: 1px solid #eef2fa; }
     .ptable td.num { text-align: right; font-variant-numeric: tabular-nums; }
     .ptable td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; }
+    /* Controller-generated AP names have no break opportunity (underscores are
+       not one in CSS), so with the default auto layout they ran straight over
+       the next column. Fixed layout makes the declared widths authoritative
+       and the name cell wraps inside its own column. min-width keeps it
+       readable on narrow screens -- .tscroll then scrolls it. */
+    .ptable.fixed { table-layout: fixed; min-width: 640px; }
+    .ptable td.name { overflow-wrap: anywhere; }
     .bar { height: 8px; background: #1e4b8f; border-radius: 3px; }
     .updated { font-size: 0.72rem; color: #a3a7b2; }
     /* Rail on the left, content on the right. */
@@ -376,6 +383,10 @@ function drawBars(host, rows) {
   host.innerHTML = h + "</tbody></table></div>";
 }
 
+// Raw controller code beside the friendly name, so an operator on a call can
+// still match what the controller shows.
+const modelCode = r => (r.code && r.code !== r.model)
+  ? ` <span style="color:#a3a7b2;font-size:0.72rem;">${esc(r.code)}</span>` : "";
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -387,9 +398,12 @@ function drawAps(body, d) {
   if (!rows.length) { body.innerHTML = '<div class="state">No access points reporting.</div>'; return; }
   let h = `<p class="sub" style="margin:-0.3rem 0 0.6rem;">${esc(d.summary_en)}<br>
            <span style="color:#a3a7b2;">${esc(d.summary_id)}</span></p>`;
-  h += '<div class="tscroll" style="max-height:420px; overflow-y:auto;"><table class="ptable"><thead><tr>' +
-       '<th>Access Point</th><th>Status</th><th style="text-align:right;">Clients</th>' +
-       '<th style="text-align:right;">Satisfaction</th><th>Model</th></tr></thead><tbody>';
+  h += '<div class="tscroll" style="max-height:420px; overflow-y:auto;">' +
+       '<table class="ptable fixed"><thead><tr>' +
+       '<th style="width:38%;">Access Point</th><th style="width:11%;">Status</th>' +
+       '<th style="width:9%; text-align:right;">Clients</th>' +
+       '<th style="width:13%; text-align:right;">Satisfaction</th>' +
+       '<th style="width:29%;">Model</th></tr></thead><tbody>';
   for (const r of rows) {
     const off = r.status !== "online";
     const sat = r.satisfaction;
@@ -398,10 +412,10 @@ function drawAps(body, d) {
     const chip = off
       ? '<span class="chip" style="background:#ffdad6;color:#93000a;">offline</span>'
       : '<span class="chip">online</span>';
-    h += `<tr style="${tint}"><td>${esc(r.ap_name)}</td><td>${chip}</td>` +
+    h += `<tr style="${tint}"><td class="name">${esc(r.ap_name)}</td><td>${chip}</td>` +
          `<td class="num">${r.num_sta == null ? "–" : r.num_sta}</td>` +
          `<td class="num">${sat == null ? "–" : sat + "%"}</td>` +
-         `<td>${esc(r.model)}</td></tr>`;
+         `<td>${esc(r.model)}${modelCode(r)}</td></tr>`;
   }
   body.innerHTML = h + "</tbody></table></div>";
 }
@@ -499,17 +513,21 @@ function drawApDetail(body, d) {
   const pct = v => v == null ? "–" : Math.round(v) + "%";
   const tint = v => v == null ? "" : (v >= 60 ? "color:#93000a;font-weight:600;"
                                              : (v >= 40 ? "color:#8a5a06;" : ""));
-  let h = '<div class="tscroll"><table class="ptable"><thead><tr><th>Access Point</th>' +
-          '<th style="text-align:right;">Clients</th><th style="text-align:right;">2.4G util</th>' +
-          '<th style="text-align:right;">5G util</th><th style="text-align:right;">CPU</th>' +
-          '<th style="text-align:right;">Memory</th><th>Model</th></tr></thead><tbody>';
+  let h = '<div class="tscroll"><table class="ptable fixed"><thead><tr>' +
+          '<th style="width:32%;">Access Point</th>' +
+          '<th style="width:9%; text-align:right;">Clients</th>' +
+          '<th style="width:11%; text-align:right;">2.4G util</th>' +
+          '<th style="width:11%; text-align:right;">5G util</th>' +
+          '<th style="width:8%; text-align:right;">CPU</th>' +
+          '<th style="width:9%; text-align:right;">Memory</th>' +
+          '<th style="width:20%;">Model</th></tr></thead><tbody>';
   for (const r of rows) {
-    h += `<tr><td>${esc(r.ap_name)}</td>` +
+    h += `<tr><td class="name">${esc(r.ap_name)}</td>` +
          `<td class="num">${r.clients == null ? "–" : r.clients}</td>` +
          `<td class="num" style="${tint(r.util_2g)}">${pct(r.util_2g)}</td>` +
          `<td class="num" style="${tint(r.util_5g)}">${pct(r.util_5g)}</td>` +
          `<td class="num">${pct(r.cpu)}</td><td class="num">${pct(r.mem)}</td>` +
-         `<td>${esc(r.model)}</td></tr>`;
+         `<td>${esc(r.model)}${modelCode(r)}</td></tr>`;
   }
   body.innerHTML = h + "</tbody></table></div>";
 }
