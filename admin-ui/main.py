@@ -327,6 +327,7 @@ PORTAL_SECTIONS = [
     {"id": "wireless", "title_en": "Wireless",          "title_id": "Nirkabel",               "default_range": "24h"},
     {"id": "traffic",  "title_en": "Traffic Insights",  "title_id": "Analisis Trafik",        "default_range": "7d"},
     {"id": "health",   "title_en": "Health & Capacity", "title_id": "Kesehatan & Kapasitas",  "default_range": "24h"},
+    {"id": "inventory","title_en": "Inventory",         "title_id": "Inventaris",             "default_range": "24h"},
     {"id": "service",  "title_en": "Service",           "title_id": "Layanan",                "default_range": "30d"},
 ]
 
@@ -532,6 +533,120 @@ def portal_abuse(customer_id, start, end):
              "syn_ratio": r["syn_ratio"]} for r in rows]
 
 
+def portal_environment(customer_id):
+    """Latest hardware gauges per router: temperature, fans, PSU state, voltage,
+    power draw. health_metrics stores value as TEXT because the gauges are a
+    mixed bag (psu1-state is 'ok', temperature is a number)."""
+    rows = _pg_rows(
+        """
+        SELECT DISTINCT ON (h.router_id, h.gauge_name)
+               r.identity_name AS router, h.gauge_name, h.value, h.unit
+        FROM health_metrics h JOIN routers r ON r.id = h.router_id
+        WHERE r.customer_id = %s AND h.time > now() - interval '2 hours'
+        ORDER BY h.router_id, h.gauge_name, h.time DESC
+        """,
+        (customer_id,),
+    )
+    pretty = {
+        "cpu-temperature": "CPU temperature", "board-temperature1": "Board temperature",
+        "sfp-temperature": "SFP temperature", "temperature": "Temperature",
+        "fan1-speed": "Fan 1", "fan2-speed": "Fan 2", "fan-state": "Fan state",
+        "psu1-state": "PSU 1", "psu2-state": "PSU 2", "voltage": "Voltage",
+        "current": "Current", "power-consumption": "Power draw",
+    }
+    return [{"router": r["router"],
+             "gauge": pretty.get(r["gauge_name"], r["gauge_name"].replace("-", " ")),
+             "value": r["value"], "unit": r["unit"] or ""} for r in rows]
+
+
+def portal_cores(customer_id, start, end):
+    """Per-core CPU load. A router can look fine on average CPU while one core
+    is pinned -- that is what a single-threaded task (often IPsec or firewall
+    hashing) looks like."""
+    sql = """
+        SELECT time_bucket_gapfill('5 minutes', c.time, %(start)s::timestamptz, %(end)s::timestamptz) AS t,
+               r.identity_name AS router, c.core_name, avg(c.load_pct) AS load
+        FROM cpu_core_metrics c JOIN routers r ON r.id = c.router_id
+        WHERE r.customer_id = %(cid)s AND c.time BETWEEN %(start)s AND %(end)s
+        GROUP BY 1, 2, 3 ORDER BY 1
+    """
+    rows = _pg_rows(sql, {"cid": customer_id, "start": start, "end": end})
+    multi = len({r["router"] for r in rows}) > 1
+    def name(r, _):
+        return f"{r['router']} {r['core_name']}" if multi else r["core_name"]
+    times, series = _reshape(rows, name, [("", "load")])
+    # A 16-core router across several sites is an unreadable spaghetti chart;
+    # keep the busiest cores, which are the ones worth looking at anyway.
+    if len(series) > 12:
+        busiest = sorted(series, key=lambda k: -max((v or 0) for v in series[k]))[:12]
+        series = {k: series[k] for k in busiest}
+    return times, series
+
+
+def portal_bands(customer_id):
+    """Client split across radio bands. A hotel with most clients on 2.4GHz is
+    usually one where 5GHz coverage does not reach the rooms."""
+    rows = _pg_rows(
+        """
+        SELECT c.radio, count(DISTINCT c.client_mac) AS n
+        FROM client_metrics c JOIN sites s ON s.id = c.site_id
+        WHERE s.customer_id = %s AND c.time > now() - interval '15 minutes'
+        GROUP BY 1
+        """,
+        (customer_id,),
+    )
+    # UniFi radio codes; Ruijie reports an empty string.
+    label = {"ng": "2.4 GHz", "na": "5 GHz", "6e": "6 GHz", "": "Unknown", None: "Unknown"}
+    out = [{"band": label.get(r["radio"], r["radio"]), "clients": int(r["n"] or 0)} for r in rows]
+    total = sum(b["clients"] for b in out) or 1
+    for b in out:
+        b["share"] = round(100.0 * b["clients"] / total, 1)
+    out.sort(key=lambda b: -b["clients"])
+    return out
+
+
+def portal_inventory(customer_id):
+    """What the customer has. Deliberately WITHOUT mgmt_host and without
+    RouterOS version / update status: those are an attacker's shopping list and
+    the customer cannot act on them anyway (we patch the CPE)."""
+    sites = _pg_rows(
+        "SELECT COALESCE(NULLIF(site_desc, ''), unifi_site_name) AS name "
+        "FROM sites WHERE customer_id = %s ORDER BY 1", (customer_id,))
+    routers = _pg_rows(
+        """
+        SELECT r.identity_name AS name, f.board_name, f.architecture, m.uptime,
+               r.last_seen_at
+        FROM routers r
+        LEFT JOIN LATERAL (SELECT board_name, architecture FROM router_firmware
+                            WHERE router_id = r.id ORDER BY time DESC LIMIT 1) f ON true
+        LEFT JOIN LATERAL (SELECT uptime FROM router_metrics
+                            WHERE router_id = r.id ORDER BY time DESC LIMIT 1) m ON true
+        WHERE r.customer_id = %s ORDER BY r.identity_name
+        """, (customer_id,))
+    ap_models = _pg_rows(
+        """
+        SELECT model, count(*) AS n FROM (
+          SELECT DISTINCT ON (a.ap_mac) a.model
+          FROM ap_inventory a JOIN sites s ON s.id = a.site_id
+          WHERE s.customer_id = %s AND a.time > now() - interval '15 minutes'
+          ORDER BY a.ap_mac, a.time DESC
+        ) x GROUP BY 1 ORDER BY 2 DESC
+        """, (customer_id,))
+    files = _pg_rows(
+        "SELECT id, label, filename, size_bytes, uploaded_at "
+        "FROM customer_topology_files WHERE customer_id = %s ORDER BY uploaded_at DESC",
+        (customer_id,))
+    return {
+        "sites": [r["name"] for r in sites],
+        "routers": [{"name": r["name"], "board": r["board_name"],
+                     "arch": r["architecture"], "uptime": r["uptime"],
+                     "last_seen": r["last_seen_at"]} for r in routers],
+        "ap_models": [{"model": r["model"], "count": int(r["n"])} for r in ap_models],
+        "files": [{"id": r["id"], "label": r["label"], "filename": r["filename"],
+                   "size": r["size_bytes"], "uploaded_at": r["uploaded_at"]} for r in files],
+    }
+
+
 def _jsonable(v):
     """Recursively make a payload JSON-safe. psycopg2 hands back Decimal for
     numeric columns and date/datetime for dates; JSONResponse is constructed
@@ -618,6 +733,22 @@ def portal_panel_list(customer_id, start, end):
     has_abuse = cur.fetchone()["x"]
     cur.execute(
         """SELECT EXISTS (
+             SELECT 1 FROM health_metrics h JOIN routers r ON r.id = h.router_id
+             WHERE r.customer_id = %s AND h.time > now() - interval '2 hours') AS x""",
+        (customer_id,),
+    )
+    has_env = cur.fetchone()["x"]
+    cur.execute(
+        """SELECT EXISTS (
+             SELECT 1 FROM cpu_core_metrics c JOIN routers r ON r.id = c.router_id
+             WHERE r.customer_id = %s AND c.time > now() - interval '24 hours') AS x""",
+        (customer_id,),
+    )
+    has_cores = cur.fetchone()["x"]
+    cur.execute("SELECT EXISTS (SELECT 1 FROM routers WHERE customer_id = %s) AS x", (customer_id,))
+    has_inventory = cur.fetchone()["x"] or has_wireless
+    cur.execute(
+        """SELECT EXISTS (
              SELECT 1 FROM dhcp_pool_metrics d JOIN routers r ON r.id = d.router_id
              WHERE r.customer_id = %s AND d.time > now() - interval '24 hours') AS x""",
         (customer_id,),
@@ -672,6 +803,30 @@ def portal_panel_list(customer_id, start, end):
                        "note_id": "Perangkat yang membuka koneksi jauh lebih cepat dari perangkat "
                                   "lain di jaringan yang sama. Sering karena perangkat terinfeksi "
                                   "atau aplikasi peer-to-peer — perlu diperiksa, bukan bukti masalah."})
+    if has_wireless:
+        panels.append({"id": "bands", "section": "wireless", "kind": "bands",
+                       "title_en": "Clients by Radio Band",
+                       "title_id": "Perangkat per Pita Radio",
+                       "note_en": "A high share on 2.4 GHz usually means 5 GHz coverage is not "
+                                  "reaching those areas.",
+                       "note_id": "Porsi 2.4 GHz yang tinggi biasanya berarti jangkauan 5 GHz "
+                                  "belum menjangkau area tersebut."})
+    if has_cores:
+        panels.append({"id": "cores", "section": "health", "kind": "line", "unit": "%",
+                       "title_en": "CPU Load per Core",
+                       "title_id": "Beban CPU per Inti",
+                       "note_en": "A single pinned core can slow traffic while the average CPU "
+                                  "still looks low.",
+                       "note_id": "Satu inti yang penuh dapat memperlambat trafik walaupun "
+                                  "rata-rata CPU terlihat rendah."})
+    if has_env:
+        panels.append({"id": "environment", "section": "health", "kind": "environment",
+                       "title_en": "Hardware Health",
+                       "title_id": "Kesehatan Perangkat Keras"})
+    if has_inventory:
+        panels.append({"id": "inventory", "section": "inventory", "kind": "inventory",
+                       "title_en": "Equipment & Sites",
+                       "title_id": "Perangkat & Lokasi"})
     if has_dhcp:
         panels.append({"id": "dhcp", "section": "health", "kind": "dhcp",
                        "title_en": "DHCP Pool Utilisation",
@@ -822,6 +977,16 @@ def portal_api_series(request: Request, panel: str, range: str = PORTAL_RANGE_DE
             times, series = portal_conntrack(customer_id, start, end)
             out["times"] = _epochs(times)
             out["series"] = {k: [_num(x) for x in v] for k, v in series.items()}
+        elif panel == "cores":
+            times, series = portal_cores(customer_id, start, end)
+            out["times"] = _epochs(times)
+            out["series"] = {k: [_num(x) for x in v] for k, v in series.items()}
+        elif panel == "environment":
+            out["rows"] = portal_environment(customer_id)
+        elif panel == "bands":
+            out["rows"] = portal_bands(customer_id)
+        elif panel == "inventory":
+            out.update(portal_inventory(customer_id))
         elif panel == "iferrors":
             out["rows"] = portal_iferrors(customer_id)
         elif panel == "apdetail":
@@ -985,6 +1150,30 @@ def portal_user_delete(request: Request, customer_id: int, user_id: int):
                 (user_id, customer_id))
     conn.commit(); conn.close()
     return RedirectResponse(f"/customers/{customer_id}", status_code=303)
+
+
+@app.get("/portal/topology/{file_id}")
+def portal_topology(request: Request, file_id: int, as_: int = Query(None, alias="as")):
+    """The customer's own network diagram. Scoped by customer_id in the WHERE
+    clause, so guessing another customer's file id returns 404 rather than
+    their document. Served as an attachment, never inline -- these are
+    operator-supplied files and inline rendering is how an SVG would run
+    script in the customer's session."""
+    customer_id = portal_customer_id(request, as_)
+    rows = _pg_rows(
+        "SELECT filename, content_type, data FROM customer_topology_files "
+        "WHERE id = %s AND customer_id = %s",
+        (file_id, customer_id),
+    )
+    if not rows:
+        return PlainTextResponse("Not found", status_code=404)
+    f = rows[0]
+    name = (f["filename"] or "topology").replace('"', "")
+    return Response(
+        bytes(f["data"]),
+        media_type=f["content_type"] or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
 
 
 @app.get("/portal/report")

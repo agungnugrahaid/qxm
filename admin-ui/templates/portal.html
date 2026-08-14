@@ -535,6 +535,76 @@ function drawAbuse(body, d) {
   body.innerHTML = h + "</tbody></table></div>";
 }
 
+function drawEnvironment(body, d) {
+  const rows = d.rows || [];
+  if (!rows.length) { body.innerHTML = '<div class="state">No hardware sensors reporting.</div>'; return; }
+  let h = '<div class="tscroll"><table class="ptable"><thead><tr><th>Router</th>' +
+          '<th>Sensor</th><th style="text-align:right;">Reading</th></tr></thead><tbody>';
+  for (const r of rows) {
+    // psu/fan state gauges report a word ("ok"), everything else a number.
+    const bad = /fail|fault|alarm|bad/i.test(String(r.value));
+    h += `<tr><td>${esc(r.router)}</td><td>${esc(r.gauge)}</td>` +
+         `<td class="num" style="${bad ? 'color:#93000a;font-weight:600;' : ''}">` +
+         `${esc(r.value)}${r.unit ? " " + esc(r.unit) : ""}</td></tr>`;
+  }
+  body.innerHTML = h + "</tbody></table></div>";
+}
+
+function drawBands(body, d) {
+  const rows = d.rows || [];
+  if (!rows.length) { body.innerHTML = '<div class="state">No clients connected right now.</div>'; return; }
+  const colour = { "2.4 GHz": "#e0752d", "5 GHz": "#1e4b8f", "6 GHz": "#00a3a3" };
+  let h = '<div class="tscroll"><table class="ptable"><tbody>';
+  for (const r of rows) {
+    h += `<tr><td style="width:110px;">${esc(r.band)}</td>` +
+         `<td><div style="background:#eef2fa;border-radius:3px;height:10px;">` +
+         `<div style="width:${r.share}%;background:${colour[r.band] || "#7b4fbd"};height:10px;border-radius:3px;"></div>` +
+         `</div></td>` +
+         `<td class="num" style="width:130px;">${r.clients} (${r.share}%)</td></tr>`;
+  }
+  body.innerHTML = h + "</tbody></table></div>";
+}
+
+function drawInventory(body, d) {
+  const box = (title, inner) =>
+    `<h3 style="font-size:0.85rem;margin:0.9rem 0 0.35rem;">${title}</h3>${inner}`;
+  let h = "";
+
+  if ((d.routers || []).length) {
+    let t = '<div class="tscroll"><table class="ptable"><thead><tr><th>Router</th><th>Model</th>' +
+            '<th>Architecture</th><th>Uptime</th></tr></thead><tbody>';
+    for (const r of d.routers) {
+      t += `<tr><td>${esc(r.name)}</td><td>${esc(r.board || "–")}</td>` +
+           `<td>${esc(r.arch || "–")}</td><td>${esc(r.uptime || "–")}</td></tr>`;
+    }
+    h += box("Routers", t + "</tbody></table></div>");
+  }
+  if ((d.ap_models || []).length) {
+    let t = '<div class="tscroll"><table class="ptable"><thead><tr><th>Access point model</th>' +
+            '<th style="text-align:right;">Count</th></tr></thead><tbody>';
+    for (const m of d.ap_models) {
+      t += `<tr><td>${esc(m.model || "–")}</td><td class="num">${m.count}</td></tr>`;
+    }
+    h += box("Access points", t + "</tbody></table></div>");
+  }
+  if ((d.sites || []).length) {
+    h += box("Sites", '<p style="font-size:0.85rem;margin:0;">' +
+             d.sites.map(esc).join(" · ") + "</p>");
+  }
+  if ((d.files || []).length) {
+    let t = '<div class="tscroll"><table class="ptable"><thead><tr><th>Network diagram</th>' +
+            '<th>File</th><th style="text-align:right;">Size</th><th></th></tr></thead><tbody>';
+    for (const f of d.files) {
+      const kb = f.size == null ? "–" : (f.size / 1024).toFixed(0) + " KB";
+      t += `<tr><td>${esc(f.label || "–")}</td><td>${esc(f.filename)}</td>` +
+           `<td class="num">${kb}</td>` +
+           `<td style="text-align:right;"><a class="btn" href="/portal/topology/${f.id}${asQ ? "?" + asQ.slice(1) : ""}">Download</a></td></tr>`;
+    }
+    h += box("Documents", t + "</tbody></table></div>");
+  }
+  body.innerHTML = h || '<div class="state">No equipment recorded.</div>';
+}
+
 async function loadPanel(el, range) {
   const id = el.dataset.panel, kind = el.dataset.kind;
   const body = el.querySelector(".body");
@@ -550,6 +620,9 @@ async function loadPanel(el, range) {
     else if (kind === "iferrors") drawIfErrors(body, d);
     else if (kind === "apdetail") drawApDetail(body, d);
     else if (kind === "abuse") drawAbuse(body, d);
+    else if (kind === "environment") drawEnvironment(body, d);
+    else if (kind === "bands") drawBands(body, d);
+    else if (kind === "inventory") drawInventory(body, d);
     else drawChart(body, d.times, d.series, kind, (el.dataset.unit || ""));
   } catch (e) {
     body.innerHTML = `<div class="state">Unavailable right now.</div>`;
