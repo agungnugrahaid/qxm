@@ -317,6 +317,19 @@ PORTAL_RANGES = {
 }
 PORTAL_RANGE_DEFAULT = "24h"
 
+# Sections for the right-hand rail. Each carries its OWN default range rather
+# than sharing one global picker: monthly SLA under a 24h window renders an
+# empty card, and 90 days of per-core CPU is an expensive accident. The picker
+# overrides only within the section the reader is in.
+PORTAL_SECTIONS = [
+    {"id": "overview", "title_en": "Overview",          "title_id": "Ringkasan",              "default_range": "24h"},
+    {"id": "internet", "title_en": "Internet",          "title_id": "Internet",               "default_range": "7d"},
+    {"id": "wireless", "title_en": "Wireless",          "title_id": "Nirkabel",               "default_range": "24h"},
+    {"id": "traffic",  "title_en": "Traffic Insights",  "title_id": "Analisis Trafik",        "default_range": "7d"},
+    {"id": "health",   "title_en": "Health & Capacity", "title_id": "Kesehatan & Kapasitas",  "default_range": "24h"},
+    {"id": "service",  "title_en": "Service",           "title_id": "Layanan",                "default_range": "30d"},
+]
+
 
 def _portal_window(rng: str):
     rng = rng if rng in PORTAL_RANGES else PORTAL_RANGE_DEFAULT
@@ -355,7 +368,7 @@ def portal_panel_list(customer_id, start, end):
     """Panel descriptors for the portal, mirroring the customer dashboard's
     layout. Cheap -- no series data, just what exists for this customer."""
     panels = [
-        {"id": "traffic", "kind": "area",
+        {"id": "traffic", "section": "internet", "kind": "area",
          "title_en": "Internet Traffic", "title_id": "Trafik Internet", "unit": "bps"},
     ]
     conn = get_conn()
@@ -371,19 +384,19 @@ def portal_panel_list(customer_id, start, end):
         (customer_id, start, end),
     )
     for r in cur.fetchall():
-        panels.append({"id": f"path:{r['id']}", "kind": "line", "unit": "ms / %",
+        panels.append({"id": f"path:{r['id']}", "section": "internet", "kind": "line", "unit": "ms / %",
                        "title_en": f"Path Latency, Jitter & Loss — {r['identity_name']}",
                        "title_id": f"Latensi, Jitter & Kehilangan Paket — {r['identity_name']}"})
     conn.close()
 
     panels += [
-        {"id": "resource", "kind": "line", "unit": "%",
+        {"id": "resource", "section": "health", "kind": "line", "unit": "%",
          "title_en": "Router Resource Usage (CPU / RAM / Disk)",
          "title_id": "Penggunaan Sumber Daya Router (CPU / RAM / Disk)"},
-        {"id": "clients", "kind": "line", "unit": "clients",
+        {"id": "clients", "section": "wireless", "kind": "line", "unit": "clients",
          "title_en": "Wi-Fi Clients Over Time",
          "title_id": "Jumlah Perangkat Wi-Fi dari Waktu ke Waktu"},
-        {"id": "wifi", "kind": "line", "unit": "",
+        {"id": "wifi", "section": "wireless", "kind": "line", "unit": "",
          "title_en": "Wi-Fi Quality (Signal / Satisfaction / Retry)",
          "title_id": "Kualitas Wi-Fi (Sinyal / Kepuasan / Pengulangan)"},
     ]
@@ -410,22 +423,22 @@ def portal_panel_list(customer_id, start, end):
     conn.close()
 
     if has_wireless:
-        panels.append({"id": "aps", "kind": "aptable",
+        panels.append({"id": "aps", "section": "wireless", "kind": "aptable",
                        "title_en": "Access Point Status",
                        "title_id": "Status Access Point"})
     if has_dhcp:
-        panels.append({"id": "dhcp", "kind": "dhcp",
+        panels.append({"id": "dhcp", "section": "health", "kind": "dhcp",
                        "title_en": "DHCP Pool Utilisation",
                        "title_id": "Penggunaan Alamat DHCP"})
     if has_sla:
-        panels.append({"id": "sla", "kind": "sla",
+        panels.append({"id": "sla", "section": "service", "kind": "sla",
                        "title_en": "SLA & Support Tickets",
                        "title_id": "SLA & Tiket Dukungan",
                        "note_en": "Recent months — not affected by the range selector above.",
                        "note_id": "Beberapa bulan terakhir — tidak mengikuti pilihan rentang di atas."})
     if flow_enabled(customer_id):
         panels += [
-            {"id": "flow_providers", "kind": "table",
+            {"id": "flow_providers", "section": "traffic", "kind": "table",
              "title_en": "Top Content Providers", "title_id": "Konten / Layanan Teratas",
              "note_en": ("Indicative figures based on sampled traffic data. Provider "
                          "ranking is representative; absolute volumes are lower than "
@@ -433,7 +446,7 @@ def portal_panel_list(customer_id, start, end):
              "note_id": ("Angka indikatif berdasarkan sampel data trafik. Peringkat "
                          "layanan bersifat representatif; volume absolut lebih rendah "
                          "dari pemakaian sebenarnya.")},
-            {"id": "flow_users", "kind": "bar",
+            {"id": "flow_users", "section": "traffic", "kind": "bar",
              "title_en": "Top Internal Users", "title_id": "Pengguna Internal Teratas",
              "note_en": ("Indicative figures based on sampled traffic data. User "
                          "ranking is representative; absolute volumes are lower than "
@@ -463,11 +476,18 @@ def portal_home(request: Request, range: str = PORTAL_RANGE_DEFAULT,
 
     # The shell renders immediately; panels stream in over /portal/api/series
     # so a slow 90-day scan never blocks the page.
+    panels = portal_panel_list(customer_id, start, end)
+    # Only offer a section that has something in it. Overview is always shown
+    # (it carries the KPI tiles, which every customer has).
+    used = {p["section"] for p in panels} | {"overview"}
+    sections = [s for s in PORTAL_SECTIONS if s["id"] in used]
+
     return templates.TemplateResponse(
         "portal.html",
         {"request": request,
          "customer_name": row["name"] if row else "",
-         "panels": portal_panel_list(customer_id, start, end),
+         "panels": panels,
+         "sections": sections,
          "ranges": list(PORTAL_RANGES.keys()),
          "range": rng,
          # Only ever set for an admin preview; a customer session gets "" and

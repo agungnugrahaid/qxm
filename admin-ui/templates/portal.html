@@ -62,6 +62,33 @@
     .ptable td.num { text-align: right; font-variant-numeric: tabular-nums; }
     .bar { height: 8px; background: #1e4b8f; border-radius: 3px; }
     .updated { font-size: 0.72rem; color: #a3a7b2; }
+    /* Rail on the right, content on the left. */
+    .layout { display: flex; gap: 1.5rem; align-items: flex-start; }
+    .main { flex: 1 1 auto; min-width: 0; }   /* min-width:0 or charts force overflow */
+    .rail { flex: 0 0 190px; position: sticky; top: 1rem; }
+    .rail ul { list-style: none; margin: 0; padding: 0; }
+    .rail a {
+      display: block; padding: 0.5rem 0.7rem; border-radius: 6px;
+      text-decoration: none; color: #434751; border: 1px solid transparent;
+    }
+    .rail a span { display: block; font-size: 0.86rem; font-weight: 600; }
+    .rail a small { display: block; font-size: 0.7rem; color: #a3a7b2; }
+    .rail a:hover { background: #fff; border-color: #dae3f4; }
+    .rail a.on { background: #1e4b8f; border-color: #1e4b8f; }
+    .rail a.on span, .rail a.on small { color: #fff; }
+    .rail-select { display: none; width: 100%; height: 38px; }
+    .section-head {
+      display: flex; align-items: flex-end; justify-content: space-between;
+      gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem;
+    }
+    .section-head h1 { font-size: 1.25rem; margin: 0; }
+    .section-head .sub { font-size: 0.78rem; color: #737782; font-style: italic; margin: 0.1rem 0 0; }
+    @media (max-width: 820px) {
+      .layout { flex-direction: column-reverse; }
+      .rail { position: static; flex: 1 1 auto; width: 100%; }
+      .rail ul { display: none; }
+      .rail-select { display: block; }
+    }
     .u-tooltip {
       position: absolute; pointer-events: none; z-index: 100; background: #131c28;
       color: #fff; font-size: 0.72rem; padding: 0.4rem 0.55rem; border-radius: 5px;
@@ -78,12 +105,6 @@
       <span>{{ customer_name }}</span>
     </div>
     <div class="toolbar">
-      <span class="range">
-        {% for r in ranges %}
-        <a href="/portal?range={{ r }}{% if preview_as %}&as={{ preview_as }}{% endif %}"
-           class="{{ 'on' if r == range else '' }}">{{ r }}</a>
-        {% endfor %}
-      </span>
       <form class="inline" method="get" action="/portal/report"
             style="display:flex; gap:0.35rem; align-items:center; margin:0;">
         <input type="date" name="start" value="{{ report_start_default }}" required
@@ -112,26 +133,63 @@
   </div>
   {% endif %}
 
-  <div class="kpi-row" id="kpis"></div>
+  <div class="layout">
+    <div class="main">
+      {% for s in sections %}
+      <section class="section" id="sec-{{ s.id }}" data-section="{{ s.id }}"
+               data-default-range="{{ s.default_range }}" hidden>
+        <div class="section-head">
+          <div>
+            <h1>{{ s.title_en }}</h1>
+            <p class="sub">{{ s.title_id }}</p>
+          </div>
+          <span class="range" data-range-for="{{ s.id }}">
+            {% for r in ranges %}<a href="#" data-range="{{ r }}">{{ r }}</a>{% endfor %}
+          </span>
+        </div>
 
-  <div id="panels">
-    {% for p in panels %}
-    <div class="panel" data-panel="{{ p.id }}" data-kind="{{ p.kind }}" data-unit="{{ p.unit or '' }}">
-      <h2>{{ p.title_en }}</h2>
-      <p class="sub">{{ p.title_id }}</p>
-      <div class="body"><div class="state">Loading…</div></div>
-      {% if p.note_en %}
-      <p class="note">{{ p.note_en }}<br><span style="color:#a3a7b2;">{{ p.note_id }}</span></p>
-      {% endif %}
+        {% if s.id == "overview" %}
+        <div class="kpi-row" id="kpis"></div>
+        <p class="note" style="margin-top:0;">
+          Live network quality for {{ customer_name }}. Pick a section on the right for detail.<br>
+          <span style="color:#a3a7b2;">Kualitas jaringan langsung. Pilih bagian di kanan untuk rincian.</span>
+        </p>
+        {% endif %}
+
+        {% for p in panels if p.section == s.id %}
+        <div class="panel" data-panel="{{ p.id }}" data-kind="{{ p.kind }}" data-unit="{{ p.unit or '' }}">
+          <h2>{{ p.title_en }}</h2>
+          <p class="sub">{{ p.title_id }}</p>
+          <div class="body"><div class="state">Loading…</div></div>
+          {% if p.note_en %}
+          <p class="note">{{ p.note_en }}<br><span style="color:#a3a7b2;">{{ p.note_id }}</span></p>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </section>
+      {% endfor %}
+      <p class="updated" id="updated"></p>
     </div>
-    {% endfor %}
-  </div>
 
-  <p class="updated" id="updated"></p>
+    <nav class="rail" aria-label="Sections">
+      <select class="rail-select" id="rail-select" aria-label="Section">
+        {% for s in sections %}<option value="{{ s.id }}">{{ s.title_en }}</option>{% endfor %}
+      </select>
+      <ul>
+        {% for s in sections %}
+        <li><a href="#{{ s.id }}" data-nav="{{ s.id }}">
+          <span>{{ s.title_en }}</span>
+          <small>{{ s.title_id }}</small>
+        </a></li>
+        {% endfor %}
+      </ul>
+    </nav>
+  </div>
 </div>
 
 <script>
-const RANGE = {{ range|tojson }};
+// Ranges are per-section (see PORTAL_SECTIONS server-side), so there is no
+// page-global range here -- each section tracks its own in rangeBySection.
 // Admin "view as" preview only -- a customer session gets "" here, and the
 // server ignores ?as= for customer sessions regardless of what is sent.
 const AS = {{ (preview_as or "")|tojson }};
@@ -351,11 +409,11 @@ function drawSla(body, d) {
   body.innerHTML = h;
 }
 
-async function loadPanel(el) {
+async function loadPanel(el, range) {
   const id = el.dataset.panel, kind = el.dataset.kind;
   const body = el.querySelector(".body");
   try {
-    const r = await fetch(`/portal/api/series?panel=${encodeURIComponent(id)}&range=${RANGE}${asQ}`);
+    const r = await fetch(`/portal/api/series?panel=${encodeURIComponent(id)}&range=${range}${asQ}`);
     const d = await r.json();
     if (d.error) { body.innerHTML = `<div class="state">Unavailable right now.</div>`; return; }
     if (kind === "table") drawTable(body, d.rows);
@@ -369,9 +427,9 @@ async function loadPanel(el) {
   }
 }
 
-async function loadKpis() {
+async function loadKpis(range) {
   try {
-    const r = await fetch(`/portal/api/kpis?range=${RANGE}${asQ}`);
+    const r = await fetch(`/portal/api/kpis?range=${range}${asQ}`);
     const d = await r.json();
     document.getElementById("kpis").innerHTML = (d.kpis || []).map(k =>
       `<div class="kpi-box"><div class="v">${k.value}</div>` +
@@ -380,15 +438,72 @@ async function loadKpis() {
   } catch (e) { /* KPIs are a nice-to-have; panels still render */ }
 }
 
-function refreshAll() {
-  loadKpis();
-  document.querySelectorAll("#panels .panel").forEach(loadPanel);
+// --- section navigation + lazy loading ---------------------------------------
+// Only the visible section fetches. With every panel on one page a visit would
+// fire 30+ queries, and the heavy ones are genuinely slow (a big customer's
+// distinct-client scan is seconds on its own). A section is re-fetched only
+// when its range changes or the refresh timer fires while it is on screen.
+
+const sections = [...document.querySelectorAll(".section")];
+const rangeBySection = {};       // section id -> chosen range
+const loadedAt = {};             // section id -> "range" it currently shows
+sections.forEach(s => rangeBySection[s.dataset.section] = s.dataset.defaultRange);
+
+function paintRangeButtons(id) {
+  const host = document.querySelector(`[data-range-for="${id}"]`);
+  if (!host) return;
+  host.querySelectorAll("a").forEach(a =>
+    a.classList.toggle("on", a.dataset.range === rangeBySection[id]));
+}
+
+async function loadSection(id, force) {
+  const sec = document.getElementById("sec-" + id);
+  if (!sec) return;
+  const range = rangeBySection[id];
+  if (!force && loadedAt[id] === range) return;   // already showing this range
+  loadedAt[id] = range;
+  paintRangeButtons(id);
+  const jobs = [...sec.querySelectorAll(".panel")].map(el => loadPanel(el, range));
+  if (id === "overview") jobs.push(loadKpis(range));
+  await Promise.all(jobs);
   document.getElementById("updated").textContent =
     "Updated " + new Date().toLocaleTimeString() + " · auto-refreshes every 60s";
 }
 
-refreshAll();
-setInterval(refreshAll, 60000);
+function activate(id, push) {
+  if (!sections.some(s => s.dataset.section === id)) id = sections[0].dataset.section;
+  sections.forEach(s => s.hidden = s.dataset.section !== id);
+  document.querySelectorAll("[data-nav]").forEach(a =>
+    a.classList.toggle("on", a.dataset.nav === id));
+  const sel = document.getElementById("rail-select");
+  if (sel) sel.value = id;
+  if (push && location.hash !== "#" + id) history.replaceState(null, "", "#" + id);
+  loadSection(id);
+  return id;
+}
+
+let active = activate((location.hash || "").replace("#", ""), false);
+
+document.querySelectorAll("[data-nav]").forEach(a => {
+  a.addEventListener("click", e => { e.preventDefault(); active = activate(a.dataset.nav, true); });
+});
+document.getElementById("rail-select")?.addEventListener("change", e => {
+  active = activate(e.target.value, true);
+});
+document.querySelectorAll("[data-range-for]").forEach(host => {
+  const id = host.dataset.rangeFor;
+  host.querySelectorAll("a").forEach(a => a.addEventListener("click", e => {
+    e.preventDefault();
+    rangeBySection[id] = a.dataset.range;
+    loadSection(id, true);
+  }));
+});
+window.addEventListener("hashchange", () => {
+  active = activate((location.hash || "").replace("#", ""), false);
+});
+
+// Refresh only what is on screen.
+setInterval(() => loadSection(active, true), 60000);
 </script>
 </body>
 </html>
