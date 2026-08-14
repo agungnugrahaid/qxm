@@ -138,6 +138,17 @@ const fmtBps = v => {
   return v.toFixed(i ? 2 : 0) + " " + u[i];
 };
 const fmtNum = v => v == null ? "–" : (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2));
+// Axis ticks need SHORT labels: uPlot clips anything wider than the axis
+// gutter, and a clipped "10.00 Mbps" renders as "0 Mbps" -- which reads as a
+// flat zero axis rather than as a truncation. Keep full precision for the
+// tooltip (fmtBps), compact it here.
+const fmtBpsAxis = v => {
+  if (v == null) return "";
+  const u = ["bps","Kbps","Mbps","Gbps","Tbps"]; let i = 0; v = Math.abs(v);
+  while (v >= 1000 && i < u.length - 1) { v /= 1000; i++; }
+  return v.toFixed(i > 0 && v < 10 ? 1 : 0) + " " + u[i];
+};
+const fmtNumAxis = v => v == null ? "" : (Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(1));
 const fmtBytes = v => {
   const u = ["B","KiB","MiB","GiB","TiB"]; let i = 0; v = Number(v) || 0;
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
@@ -193,7 +204,12 @@ function drawChart(host, times, series, kind, unit) {
     scales: { x: { time: true } },
     axes: [
       {},
-      { size: 58, values: (u, ticks) => ticks.map(v => unit === "bps" ? fmtBps(v) : fmtNum(v)) }
+      {
+        // 72px fits "100 Mbps" / "1.5 Gbps" at this font; below that uPlot
+        // silently clips the label instead of widening the gutter.
+        size: 72,
+        values: (u, ticks) => ticks.map(v => unit === "bps" ? fmtBpsAxis(v) : fmtNumAxis(v)),
+      }
     ],
     series: [
       {},
